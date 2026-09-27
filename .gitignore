@@ -1,0 +1,18 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# live run artifacts (curated copies live in findings/)
+runs/
+supervisor.log
+
+# local machine state: sandbox package copy, archived DBs, resume target
+sandbox_mem/
+archive/
+resume_config.json
+
+# model checkpoints / pickles
+*.pkl
+*.pt
