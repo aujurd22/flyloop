@@ -2,3 +2,7 @@
 {"id": "R2", "claim": "p* ~ r^alpha with alpha in [0.5, 2.0]", "status": "REGISTERED", "ts": "2026-09-27 14:32:39"}
 {"id": "R3", "claim": "old-task error non-decreasing in p (>=8/9, Spearman>=0.8)", "status": "REGISTERED", "ts": "2026-09-27 14:32:39"}
 {"id": "R4", "claim": "error-gated policy within 25% of best stochastic objective at matched realized rate", "status": "REGISTERED", "ts": "2026-09-27 14:32:39"}
+{"id": "R1", "status": "CONFIRMED", "evidence": "9/9 drifts have interior argmin on seed-averaged total(p) (claim >=7/9); grid argmins span p=0.02..0.35", "ts": "2026-09-27 15:22:54"}
+{"id": "R2", "status": "REFUTED", "evidence": "alpha=-0.178 (claim [0.5,2.0]), R2=0.099; refined p* per-seed is bimodal (jumps between ~0.02 and ~0.25-1.0 modes at r=5e-5: argmins [0.05,1.0,0.35,0.05,0.05,0.5]) - p* is not a power law of drift in this model", "ts": "2026-09-27 15:22:54"}
+{"id": "R3", "status": "PARTIAL", "evidence": "Spearman(old_err,p)>=0.864 in 9/9 drifts (claim >=0.8: PASS) but strictly non-decreasing old_err in 0/9 drifts (claim >=8/9: FAIL); failures are single small down-steps, rank structure is strong", "ts": "2026-09-27 15:22:54"}
+{"id": "R4", "status": "CONFIRMED", "evidence": "gated/stochastic total-error ratio 0.618..1.172 across 9 drifts, all within the registered 1.25 band", "ts": "2026-09-27 15:22:54"}
