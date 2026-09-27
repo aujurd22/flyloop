@@ -16,7 +16,8 @@ import numpy as np  # noqa: E402
 from sentence_transformers import SentenceTransformer  # noqa: E402
 
 from flyloop import config as C  # noqa: E402
-from flyloop.cycle import table_text, book_text, fact_text, fam_query, book_query  # noqa: E402
+from flyloop.cycle import (table_text, book_text_v3, pad_text, fact_text,  # noqa: E402
+                           fam_query)
 from flyloop.world import distractor_text  # noqa: E402
 
 m = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
@@ -40,9 +41,13 @@ def check(name, cond, val, detail=""):
 
 tabs = [table_text(f, 10 + f, 53000, "6:10 12:7 5:4 7:3 9:2") for f in range(4)]
 tabs_upd = [table_text(f, 10 + f, 53100, "7:3 5:4 12:7 9:2 1:6") for f in range(4)]
-rules = {0: (65, 10, 8), 1: (52, 3, 7), 2: (43, 4, 11), 3: (37, 8, 1)}
-bk = book_text(rules, 53000)
-bk2 = book_text({**rules, 0: (66, 7, 1)}, 53100)
+books = [book_text_v3(f, {f: {f"f{f}r1": {"a": 10, "b": 8, "ep": 65},
+                              f"f{f}r2": {"a": 3, "b": 7, "ep": 52}}}, 53000)
+         for f in range(4)]
+books_upd = [book_text_v3(f, {f: {f"f{f}r2": {"a": 3, "b": 7, "ep": 66},
+                                  f"f{f}r3": {"a": 4, "b": 11, "ep": 66}}}, 53100)
+             for f in range(4)]
+pads = [pad_text(80, 1), pad_text(96, 2)]
 facts = [fact_text(i, C.FACT_WORDS[i], "C", 53000, C.FACT_DESC[i]) for i in range(24)]
 noises = [distractor_text(1), distractor_text(99)]
 
@@ -52,10 +57,25 @@ check("table cross-family < 0.75",
 check("table same-fam update > 0.75",
       min(sim(tabs[i], tabs_upd[i]) for i in range(4)) > 0.75,
       min(sim(tabs[i], tabs_upd[i]) for i in range(4)))
-check("book vs tables < 0.75", mx([(bk, t) for t in tabs]) < 0.75, mx([(bk, t) for t in tabs]))
-check("book vs facts < 0.75", mx([(bk, f) for f in facts]) < 0.75, mx([(bk, f) for f in facts]))
-check("book vs noise < 0.75", mx([(bk, n) for n in noises]) < 0.75, mx([(bk, n) for n in noises]))
-check("book update > 0.75", sim(bk, bk2) > 0.75, sim(bk, bk2))
+check("book cross-family < 0.75",
+      mx([(books[i], books[j]) for i in range(4) for j in range(i + 1, 4)]) < 0.75,
+      mx([(books[i], books[j]) for i in range(4) for j in range(i + 1, 4)]))
+check("book update > 0.75", min(sim(books[i], books_upd[i]) for i in range(4)) > 0.75,
+      min(sim(books[i], books_upd[i]) for i in range(4)))
+check("book vs tables < 0.75", mx([(b, t) for b in books for t in tabs]) < 0.75,
+      mx([(b, t) for b in books for t in tabs]))
+check("book vs facts < 0.75", mx([(b, f) for b in books for f in facts]) < 0.75,
+      mx([(b, f) for b in books for f in facts]))
+check("book vs noise < 0.75", mx([(b, n) for b in books for n in noises]) < 0.75,
+      mx([(b, n) for b in books for n in noises]))
+check("pad update > 0.75 (in-place rewrite)", sim(pads[0], pads[1]) > 0.75,
+      sim(pads[0], pads[1]))
+check("pad vs tables < 0.75", mx([(p, t) for p in pads for t in tabs]) < 0.75,
+      mx([(p, t) for p in pads for t in tabs]))
+check("pad vs facts < 0.75", mx([(p, f) for p in pads for f in facts]) < 0.75,
+      mx([(p, f) for p in pads for f in facts]))
+check("pad vs book < 0.75", mx([(p, b) for p in pads for b in books]) < 0.75,
+      mx([(p, b) for p in pads for b in books]))
 check("table vs facts < 0.75", mx([(t, f) for t in tabs for f in facts]) < 0.75,
       mx([(t, f) for t in tabs for f in facts]))
 fact_pairs = [(facts[i], facts[j]) for i in range(24) for j in range(i + 1, 24)]
@@ -74,14 +94,10 @@ for f in range(4):
     print(f"{'ok  ' if ok else 'FAIL'} fam{f} query -> best={ss[0][1]} {ss[0][0]:.3f} (2nd {ss[1][0]:.3f})")
     if not ok:
         fails.append(f"query_fam{f}")
-qb = book_query()
-s_book = sim(qb, bk)
-s_tabs = mx([(qb, t) for t in tabs])
-check("book query ranks book above tables", s_book > s_tabs, s_book, f"tables {s_tabs:.3f}")
 
 print()
 if fails:
     print(f"{len(fails)} FAILURES: {fails}")
     sys.exit(1)
 print(f"ALL CALIBRATION CONSTRAINTS PASS (tables {max(len(t) for t in tabs)} chars max, "
-      f"book {len(bk)}, facts {max(len(f) for f in facts)})")
+      f"book {max(len(b) for b in books)}, facts {max(len(f) for f in facts)})")

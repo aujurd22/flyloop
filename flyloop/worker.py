@@ -1,12 +1,20 @@
-"""Overnight worker: runs the 7-step loop for `duration` hours (v2).
+"""Overnight worker, v3: two memory arms through the identical world.
 
-Robustness contract (unchanged from v1): every cycle try/except; N consecutive
+Robustness contract (v1/v2, unchanged): every cycle try/except; N consecutive
 failures trip a circuit breaker -> checkpoint -> exit(3); checkpoint every 50
 cycles / 120s; heartbeat 15s; STATUS 60s; periodic reports; service-down ->
 local mirror with auto-switch-back; RAM red line; deadline in deadline.json.
 
-v2 additions: dual seq streams A/B, fact A/B arms, quota-stop rules
-(DESIGN_V2 §8: events are bought by statistics, not by wall clock).
+v3 additions (V3_DESIGN.md):
+  - FULL arm (book registry, port MEM_PORT) and EPI arm (tables only,
+    port MEM_PORT_EPI) run the same cycle loop back-to-back, sharing one
+    precomputed world schedule and one PadSync (byte-exact write parity).
+  - quota-stop on episode statistics (NEW/VARIANT/RECALL/shocks);
+  - ENGINEERING_INVALID status: an engineering failure voids the run as a
+    hypothesis test without scoring it as a hypothesis negative;
+  - endpoint verdicts (V3-P01..P08) are applied by experiments/analyze_v3.py,
+    NOT here — the worker pre-registers and stays honest about what it cannot
+    compute in-flight (paired bootstrap).
 """
 import argparse
 import asyncio
@@ -20,7 +28,9 @@ from . import config as C, world, reports
 from .memclient import MemFacade
 from .poetleg import PoetLeg
 from .insight import Metrics, Ledger, InsightDetector
-from .cycle import CycleRunner
+from .cycle import CycleRunner, PadSync
+
+ARMS = ("FULL", "EPI")
 
 
 def log(msg):
@@ -68,8 +78,9 @@ class Worker:
         os.makedirs(os.path.join(self.run_dir, "checkpoints"), exist_ok=True)
         self.events_path = os.path.join(self.run_dir, "events.jsonl")
         self.state_path = os.path.join(self.run_dir, "state.json")
-        self.poetA_path = os.path.join(self.run_dir, "poetA.pt")
-        self.poetB_path = os.path.join(self.run_dir, "poetB.pt")
+        self.poet_paths = {arm: {"A": os.path.join(self.run_dir, f"poet{arm}_A.pt"),
+                                 "B": os.path.join(self.run_dir, f"poet{arm}_B.pt")}
+                           for arm in ARMS}
         self.ledger_path = os.path.join(self.run_dir, "ledger.jsonl")
         self.stop_path = os.path.join(self.run_dir, "STOP")
         self.hb_path = os.path.join(self.run_dir, "heartbeat.json")
@@ -78,6 +89,7 @@ class Worker:
         self.max_cycles = max_cycles
         self.cycle = 0
         self.fails = 0
+        self.run_status = "OK"
 
     # ------------------------------------------------------------------
     def _load_state(self):
@@ -86,130 +98,86 @@ class Worker:
                 return json.load(f)
         return {}
 
-    def _save(self, det, runner, poets, wall_start):
+    def _save(self, detF, detE, runF, runE, poets, wall_start):
         _atomic_json(self.state_path, {
             "cycle": self.cycle, "wall_start": wall_start,
-            "det": det.to_dict(), "runner": runner.to_dict(),
-            "poetA_updates": poets["A"].updates, "poetB_updates": poets["B"].updates,
+            "run_status": self.run_status,
+            "detF": detF.to_dict(), "detE": detE.to_dict(),
+            "runnerF": runF.to_dict(), "runnerE": runE.to_dict(),
+            "poets": {arm: {tag: p.updates for tag, p in poets[arm].items()}
+                      for arm in ARMS},
             "ts": time.strftime("%Y-%m-%d %H:%M:%S")})
-        for tag, p in poets.items():
-            p.save(self.poetA_path if tag == "A" else self.poetB_path)
+        for arm in ARMS:
+            for tag, p in poets[arm].items():
+                p.save(self.poet_paths[arm][tag])
 
-    def _heartbeat(self, mem_mode):
+    def _heartbeat(self, modes):
         _atomic_json(self.hb_path, {
             "cycle": self.cycle, "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "fails": self.fails, "mem_mode": mem_mode,
+            "fails": self.fails, "mem_mode": modes,
+            "run_status": self.run_status,
             "ram_gb": ram_avail_gb()})
 
-    # -- v2 registered predictions (registered before the first cycle) --------
+    # -- v3 registered predictions (registered before the first cycle) --------
     def _pre_register(self):
         cmax = self.max_cycles
         r = self.ledger.register
-        r("V2-P01: cold rate (puzzle) <= 5% after truncation fix",
-          cmax, "run", "band: >15% => NEGATIVE (audit implementation first)")
-        r("V2-P02: rule entries survive active in their own compartment: >=90% of "
-          "discoveries readable back as flags",
+        r("V3-P01 (PRIMARY): Full arm RECALL error in the first 20 probes lower "
+          "than Episodic, paired bootstrap 95% CI of dE excludes 0",
+          cmax, "run", "unit = RECALL episode; analysis: experiments/analyze_v3.py")
+        r("V3-P02 (PRIMARY): Full arm recovery latency (first correct probe) "
+          "shorter than Episodic on RECALL, paired CI excludes 0",
           cmax, "run", "")
-        r("V2-P03: fact B arm (state_lookup) error <= half of fact A arm (recall) error",
+        r("V3-P03: the Full advantage survives at every recurrence gap 2/3/4/5 "
+          "(point estimate of dE in favor of Full in all four buckets)",
           cmax, "run", "")
-        r("V2-P04: write-readback failures on sampled fact writes <= 2%",
+        r("V3-P04 (NC1): |dE| on VARIANT clearly smaller than on RECALL — the "
+          "Full advantage is recurrence reuse, not generic smartness",
           cmax, "run", "")
-        r("V2-P05: no invariant violations observed (I1 active-unique via state_history)",
+        r("V3-P05: stale intrusion rate SIR(Full) <= 1.5 x SIR(Episodic) — "
+          "remembering more must not mean confusing past with present",
           cmax, "run", "")
-        r("V2-P06: seq stream B (regime marker) rolling err < 0.68 (oracle 0.639)",
+        r("V3-P06: useful-insight rate (discoveries whose rule later pays off on "
+          "a recurrence) above the permutation null (95th pct)",
           cmax, "run", "")
-        r("V2-P07: seq stream A replicates v1 stall: err >= 0.70 for >= 90% of 1k-bins",
+        r("V3-P07: Full degrades slower than Episodic from noise phase A (1x) "
+          "to phase C (4x), on RECALL episodes and overall",
           cmax, "run", "")
-        r("V2-P08: signature CONFIRMED ratio in [0.4, 0.9] (no overflow)",
+        r("V3-P08 (NC2): fact lane shows no regression under the v3 policy: "
+          "phase-C err100 <= 2x phase-A err100 and <= 0.20 absolute, both arms",
           cmax, "run", "")
-        r("V2-P09: >=40000 cycles in 5h (speed target), 0 breaker trips",
-          cmax, "run", "")
-        r("V2-P10: memory entries <= 40000 at end",
-          cmax, "run", "")
-        log("[ledger] pre-registered 10 v2 run-level predictions")
+        log("[ledger] pre-registered 8 v3 predictions")
 
-    def _seq_bin_stats(self, metrics, lane, cycle, bin_size=1000):
-        d = metrics.err.get(lane, {})
-        bins, cur, acc = [], 0, []
-        for c in sorted(d):
-            b = c // bin_size
-            while len(bins) <= b:
-                bins.append([])
-            bins[b].append(d[c])
-        return [sum(v) / len(v) for v in bins if v]
+    # ------------------------------------------------------------------
+    def _quota_state(self, runF, detF):
+        ep = runF.counts["episodes"]
+        return {"NEW": ep["NEW"], "VARIANT": ep["VARIANT"], "RECALL": ep["RECALL"],
+                "shocks": detF.shock_seen()}
 
-    def _adjudicate(self, det, runner, entries_count, metrics):
-        led = self.ledger
-        ct = runner.counts
-        # P01 cold rate
-        puz_n = sum(1 for _ in [0])  # placeholder; computed from counters below
-        cold = ct.get("trunc_fail", 0)
-        puz_total = ct.get("pair_writes", 0) + 1  # approximations guarded below
-        # use probe count = fact writes + pair writes is wrong; use events-derived
-        probes = ct.get("_puz_probes", 0)
-        if probes:
-            rate = cold / probes
-            led.set_status("V2-P01", "CONFIRMED" if rate <= 0.05 else
-                           ("PARTIAL" if rate <= 0.15 else "REFUTED"),
-                           f"cold={cold}/{probes}={rate:.3f}")
-        # P02 rule survival (readback failures)
-        rb = ct.get("readback_fail", 0)
-        disc = ct.get("discoveries", 0)
-        if disc:
-            ok_frac = 1 - rb / max(disc, 1)
-            led.set_status("V2-P02", "CONFIRMED" if ok_frac >= 0.9 else
-                           ("PARTIAL" if ok_frac >= 0.7 else "REFUTED"),
-                           f"readback_fail={rb}/{disc}")
-        # P03 A/B arm
-        a_n, b_n = ct.get("factA_n", 0), ct.get("factB_n", 0)
-        a_h, b_h = ct.get("factA_hit", 0), ct.get("factB_hit", 0)
-        if a_n and b_n:
-            ea = sum(metrics.err.get("factA", {}).values()) / max(len(metrics.err.get("factA", {})), 1)
-            eb = sum(metrics.err.get("factB", {}).values()) / max(len(metrics.err.get("factB", {})), 1)
-            led.set_status("V2-P03", "CONFIRMED" if eb <= ea / 2 else
-                           ("PARTIAL" if eb < ea else "REFUTED"),
-                           f"errA={ea:.3f} errB={eb:.3f} hitA={a_h}/{a_n} hitB={b_h}/{b_n}")
-        # P04 readback rate
-        fw = max(ct.get("fact_writes", 0) // 20, 1)
-        led.set_status("V2-P04", "CONFIRMED" if rb <= 0.02 * fw else "REFUTED",
-                       f"readback_fail={rb}, sampled_writes={fw}")
-        # P06/P07 streams
-        bins_b = self._seq_bin_stats(metrics, "seqB", self.cycle)
-        bins_a = self._seq_bin_stats(metrics, "seqA", self.cycle)
-        if bins_b:
-            last10 = bins_b[-10:]
-            mb = sum(last10) / len(last10)
-            led.set_status("V2-P06", "CONFIRMED" if mb < 0.68 else
-                           ("PARTIAL" if mb < 0.75 else "REFUTED"),
-                           f"seqB last10k-bin mean={mb:.3f} (bins={len(bins_b)})")
-        if bins_a:
-            frac_ge70 = sum(1 for v in bins_a if v >= 0.70) / len(bins_a)
-            led.set_status("V2-P07", "CONFIRMED" if frac_ge70 >= 0.9 else "REFUTED",
-                           f"bins>=0.70: {frac_ge70:.2f} ({len(bins_a)} bins)")
-        # P08 signature ratio
-        sigs = [i for i in led.items if i["kind"] == "signature"
-                and i["status"] in ("CONFIRMED", "REFUTED")]
-        if sigs:
-            conf = sum(1 for i in sigs if i["status"] == "CONFIRMED")
-            frac = conf / len(sigs)
-            led.set_status("V2-P08", "CONFIRMED" if 0.4 <= frac <= 0.9 else "REFUTED",
-                           f"{conf}/{len(sigs)} = {frac:.2f}")
-        # P09/P10 run-level
-        led.set_status("V2-P09", "CONFIRMED" if self.cycle >= 40000 and self.fails == 0
-                       else "REFUTED", f"cycles={self.cycle} fails_trail={self.fails}")
-        if entries_count is not None:
-            led.set_status("V2-P10", "CONFIRMED" if entries_count <= 40000 else "REFUTED",
-                           f"entries={entries_count}")
-        led.save()
+    def _quotas_met(self, runF, detF):
+        q = self._quota_state(runF, detF)
+        return (q["NEW"] >= C.QUOTA_NEW and q["VARIANT"] >= C.QUOTA_VARIANT
+                and q["RECALL"] >= C.QUOTA_RECALL and q["shocks"] >= C.QUOTA_SHOCKS)
 
-    async def _mem_entries_count(self, mem):
-        text, mode = await mem.stats()
-        m = re.search(r"Memories:\s*(\d+)", text or "")
-        return (int(m.group(1)) if m else None), mode
+    def _engineering_check(self, runF, runE, entries):
+        """Tripwires that void the run as a hypothesis test (V3 §14)."""
+        bad = []
+        for arm, run in (("FULL", runF), ("EPI", runE)):
+            ct = run.counts
+            rb = (ct.get("fact_readback_fail", 0) + ct.get("rulebook_readback_fail", 0)
+                  + ct.get("table_readback_fail", 0))
+            writes = max(ct.get("fact_writes", 0) + ct.get("book_writes", 0)
+                         + ct.get("pair_writes", 0), 1)
+            if rb > C.MAX_READBACK_FAIL_FRAC * writes:
+                bad.append(f"{arm}: readback failures {rb}/{writes}")
+            n = entries.get(arm)
+            if n is not None and n > C.MAX_MEM_ENTRIES:
+                bad.append(f"{arm}: memory entries {n} > {C.MAX_MEM_ENTRIES}")
+        return bad
 
     # ------------------------------------------------------------------
     async def run(self):
-        self._mem = None
+        self._mems = []
         try:
             from .supervisor import keep_awake
             keep_awake()
@@ -218,12 +186,13 @@ class Worker:
         try:
             await self._run()
         finally:
-            if self._mem is not None:
-                await self._mem.close()
+            for m in self._mems:
+                await m.close()
 
     async def _run(self):
         st = self._load_state()
         self.cycle = st.get("cycle", 0)
+        self.run_status = st.get("run_status", "OK")
         if os.path.exists(self.dl_path):
             with open(self.dl_path, encoding="utf-8") as f:
                 dl = json.load(f)
@@ -233,41 +202,63 @@ class Worker:
             deadline = wall_start + self.duration_h * 3600
             _atomic_json(self.dl_path, {"wall_start": wall_start, "deadline": deadline})
 
-        metrics = Metrics()
-        metrics.load_events(load_events(self.events_path))
-        self.ledger = Ledger(self.ledger_path)
-        det = InsightDetector(metrics, self.ledger, log)
-        det.load_dict(st.get("det", {}))
+        # the world schedule must exist as an artifact BEFORE the first cycle
+        sched_path = os.path.join(self.run_dir, "world_schedule.json")
+        if not os.path.exists(sched_path):
+            _atomic_json(sched_path, world.puz_schedule())
+        self._pre_register_needed = not os.path.exists(self.ledger_path)
 
-        mem = MemFacade(log)
-        self._mem = mem
-        await mem.start()
+        metricsF, metricsE = Metrics(), Metrics()
+        metricsF.load_events(load_events(self.events_path), arm="FULL")
+        metricsE.load_events(load_events(self.events_path), arm="EPI")
+        self.ledger = Ledger(self.ledger_path)
+        detF = InsightDetector(metricsF, self.ledger, log, signatures=False)
+        detE = InsightDetector(metricsE, self.ledger, log, signatures=False)
+        detF.load_dict(st.get("detF", {}))
+        detE.load_dict(st.get("detE", {}))
+
+        memF = MemFacade(log, C.MEM_URL)
+        memE = MemFacade(log, C.MEM_URL_EPI)
+        self._mems = [memF, memE]
+        await memF.start()
+        await memE.start()
         try:
-            await mem.recall("FLFACT warmup", compartment=C.COMPARTMENT_FACT)
+            await memF.recall("FLFACT warmup", compartment=C.COMPARTMENT_FACT)
+            await memE.recall("FLFACT warmup", compartment=C.COMPARTMENT_FACT)
         except Exception as e:
             log(f"[mem] warmup skipped: {e}")
 
-        poets = {"A": PoetLeg("A", C.SEQ_V, C.SEQ_CTX + 1, C.SEQ_V, log),
-                 "B": PoetLeg("B", C.SEQ_V + C.SEQ_N_REGIMES, C.SEQ_CTX + 2, C.SEQ_V, log)}
-        for tag, path in (("A", self.poetA_path), ("B", self.poetB_path)):
-            if os.path.exists(path):
-                try:
-                    poets[tag].load(path)
-                    log(f"[poet{tag}] resumed (updates={poets[tag].updates})")
-                except Exception as e:
-                    log(f"[poet{tag}] load failed ({e}); starting fresh")
-        runner = CycleRunner(mem, poets, det, self.ledger, log)
-        runner.load_dict(st.get("runner", {}))
-        metrics.puz_probes = 0
+        poets = {}
+        for arm in ARMS:
+            poets[arm] = {
+                "A": PoetLeg(f"{arm}-A", C.SEQ_V, C.SEQ_CTX + 1, C.SEQ_V, log),
+                "B": PoetLeg(f"{arm}-B", C.SEQ_V + C.SEQ_N_REGIMES, C.SEQ_CTX + 2,
+                             C.SEQ_V, log)}
+            for tag, path in self.poet_paths[arm].items():
+                if os.path.exists(path):
+                    try:
+                        poets[arm][tag].load(path)
+                        log(f"[poet{arm}-{tag}] resumed (updates={poets[arm][tag].updates})")
+                    except Exception as e:
+                        self.run_status = f"ENGINEERING_INVALID:poet-{arm}-{tag}-load"
+                        log(f"[poet{arm}-{tag}] load failed ({e}); run marked invalid")
 
-        if not self.ledger.items:
+        pad = PadSync()
+        runF = CycleRunner(memF, poets["FULL"], detF, self.ledger, log,
+                           arm="FULL", pad_sync=pad)
+        runE = CycleRunner(memE, poets["EPI"], detE, self.ledger, log,
+                           arm="EPI", pad_sync=pad)
+        runF.load_dict(st.get("runnerF", {}))
+        runE.load_dict(st.get("runnerE", {}))
+        if self._pre_register_needed:
             self._pre_register()
 
         last_hb = last_ckpt = last_status = last_report = last_probe = time.time()
         report_n = len([f for f in os.listdir(os.path.join(self.run_dir, "reports"))
                         if f.startswith("report_")])
         end = "unknown"
-        log(f"[worker] v2 start at cycle {self.cycle}, deadline "
+        log(f"[worker] v3 start at cycle {self.cycle} (arms FULL@{C.MEM_PORT} / "
+            f"EPI@{C.MEM_PORT_EPI}), deadline "
             f"{time.strftime('%m-%d %H:%M', time.localtime(deadline))}")
 
         while True:
@@ -282,29 +273,30 @@ class Worker:
             if c > self.max_cycles:
                 end = "max cycles"
                 break
-            # quota-stop (v2): events bought by statistics, not wall clock.
-            # Disabled when the operator books the full window (QUOTA_ENABLED).
-            if (C.QUOTA_ENABLED and
-                    runner.counts.get("discoveries", 0) >= C.QUOTA_DISCOVERIES and
-                    det.shock_seen() >= C.QUOTA_SHOCKS):
+            if C.QUOTA_ENABLED and self._quotas_met(runF, detF):
                 end = "quota satisfied"
                 break
             try:
-                rec = await runner.run_cycle(c)
+                t0 = time.perf_counter()
+                recF = await runF.run_cycle(c)
+                recE = await runE.run_cycle(c)
                 self.cycle = c
                 self.fails = 0
                 with open(self.events_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                metrics.add(c, "seqA", rec.get("seqA_err"))
-                metrics.add(c, "seqB", rec.get("seqB_err"))
-                metrics.add(c, "factA", rec.get("factA_err"))
-                metrics.add(c, "factB", rec.get("factB_err"))
-                metrics.add(c, "puzzle", rec.get("puz_err"))
-                if "puz_err" in rec:
-                    runner.counts["_puz_probes"] = runner.counts.get("_puz_probes", 0) + 1
-                det.on_cycle(c, rec)
-                if rec.get("dt_ms", 9999) < C.SPEED_PACING_MS:
-                    await asyncio.sleep((C.SPEED_PACING_MS - rec["dt_ms"]) / 1000.0)
+                    f.write(json.dumps(recF, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(recE, ensure_ascii=False) + "\n")
+                for rec, met in ((recF, metricsF), (recE, metricsE)):
+                    met.add(c, "seqA", rec.get("seqA_err"))
+                    met.add(c, "seqB", rec.get("seqB_err"))
+                    met.add(c, "factA", rec.get("factA_err"))
+                    met.add(c, "factB", rec.get("factB_err"))
+                    if rec.get("lane") == "puzzle":
+                        met.add(c, "puzzle", rec.get("error"))
+                detF.on_cycle(c, recF)
+                detE.on_cycle(c, recE)
+                dt = (time.perf_counter() - t0) * 1000
+                if dt < C.SPEED_PACING_MS:
+                    await asyncio.sleep((C.SPEED_PACING_MS - dt) / 1000.0)
             except Exception as e:
                 self.fails += 1
                 log(f"[c{c}] cycle FAILED ({self.fails}): "
@@ -313,92 +305,117 @@ class Worker:
                     f.write(json.dumps({"c": c, "error": f"{type(e).__name__}: {str(e)[:150]}",
                                         "t": time.strftime("%H:%M:%S")}) + "\n")
                 if self.fails >= C.CONSECUTIVE_FAIL_LIMIT:
-                    self._save(det, runner, poets, wall_start)
+                    self.run_status = "ENGINEERING_INVALID:consecutive-failures"
+                    self._save(detF, detE, runF, runE, poets, wall_start)
                     log("circuit breaker OPEN -> checkpoint saved, exit(3)")
                     sys.exit(3)
 
             now = time.time()
             if now - last_hb > C.HEARTBEAT_EVERY_S:
-                self._heartbeat(mem.mode)
+                self._heartbeat(f"{memF.mode}/{memE.mode}")
                 last_hb = now
             if now - last_ckpt > C.CHECKPOINT_EVERY_S or c % C.CHECKPOINT_EVERY_CYCLES == 0:
-                self._save(det, runner, poets, wall_start)
+                self._save(detF, detE, runF, runE, poets, wall_start)
                 last_ckpt = now
             if now - last_status > C.STATUS_EVERY_S:
-                snap = reports.build_snapshot(
-                    self.cycle, wall_start, self.duration_h, self.max_cycles,
-                    metrics, det, runner, self.ledger, mem.mode, None,
-                    poets, end="running", ram_gb=ram_avail_gb())
-                reports.write_status(self.run_dir, reports.render(snap))
+                snap = self._snap(c, wall_start, metricsF, metricsE, detF, runF,
+                                  runE, pad, memF, memE, poets, end="running")
+                reports.write_status(self.run_dir, reports.render_v3(snap))
                 last_status = now
             if now - last_report > C.REPORT_EVERY_S:
-                extra = reports.scan_events(self.run_dir)
-                snap = reports.build_snapshot(
-                    self.cycle, wall_start, self.duration_h, self.max_cycles,
-                    metrics, det, runner, self.ledger, mem.mode, None,
-                    poets, end="running", ram_gb=ram_avail_gb())
-                snap.update(puz_methods=extra["puz_methods"], hits=extra["hits"],
-                            drifts_seen=extra["drifts_seen"],
-                            binned={l: reports._binned(metrics, l, self.cycle)
-                                    for l in ("seqA", "seqB", "factA", "factB", "puzzle")})
-                reports.write_hourly(self.run_dir, reports.render(snap, detail=True),
+                snap = self._snap(c, wall_start, metricsF, metricsE, detF, runF,
+                                  runE, pad, memF, memE, poets, end="running",
+                                  detail=True)
+                reports.write_hourly(self.run_dir, reports.render_v3(snap, detail=True),
                                      report_n + 1)
                 report_n += 1
                 last_report = now
-            if mem.mode == "local" and now - last_probe > 30:
-                await mem.probe()
+            if memF.mode == "local" and now - last_probe > 30:
+                await memF.probe()
+                last_probe = now
+            if memE.mode == "local" and now - last_probe > 30:
+                await memE.probe()
                 last_probe = now
             await asyncio.sleep(0)
 
         # ---------------- graceful end ----------------
         log(f"[worker] ending: {end} at cycle {self.cycle}")
-        self._save(det, runner, poets, wall_start)
-        entries, _ = await self._mem_entries_count(mem)
-        self._adjudicate(det, runner, entries, metrics)
-        extra = reports.scan_events(self.run_dir)
+        self._save(detF, detE, runF, runE, poets, wall_start)
+        entries = {}
+        for arm, mem in (("FULL", memF), ("EPI", memE)):
+            n, _ = await self._mem_entries_count(mem)
+            entries[arm] = n
+        bad = self._engineering_check(runF, runE, entries)
+        if bad:
+            self.run_status = "ENGINEERING_INVALID:" + ";".join(bad)[:150]
+        snap = self._snap(self.cycle, wall_start, metricsF, metricsE, detF, runF,
+                          runE, pad, memF, memE, poets, end=end, detail=True,
+                          entries=entries)
+        reports.write_status(self.run_dir, reports.render_v3(snap))
+        reports.write_final(self.run_dir, reports.render_v3(snap, detail=True), end)
+        log(f"[worker] final report written; entries={entries}; "
+            f"run_status={self.run_status}; bye")
+
+    def _snap(self, c, wall_start, metricsF, metricsE, detF, runF, runE, pad,
+              memF, memE, poets, end="running", detail=False, entries=None):
         snap = reports.build_snapshot(
-            self.cycle, wall_start, self.duration_h, self.max_cycles,
-            metrics, det, runner, self.ledger, mem.mode,
-            f"entries={entries}", poets, end=end, ram_gb=ram_avail_gb())
-        snap.update(puz_methods=extra["puz_methods"], hits=extra["hits"],
-                    drifts_seen=extra["drifts_seen"],
-                    binned={l: reports._binned(metrics, l, self.cycle)
-                            for l in ("seqA", "seqB", "factA", "factB", "puzzle")})
-        reports.write_status(self.run_dir, reports.render(snap))
-        reports.write_final(self.run_dir, reports.render(snap, detail=True), end)
-        log(f"[worker] final report written; entries={entries}; bye")
+            c, wall_start, self.duration_h, self.max_cycles,
+            metricsF, detF, runF, self.ledger, memF.mode, None,
+            poets["FULL"], end=end, ram_gb=ram_avail_gb())
+        snap.update(arm_stats={
+            "FULL": {"metrics": metricsF.summary(c), "counts": runF.counts},
+            "EPI": {"metrics": metricsE.summary(c), "counts": runE.counts}},
+            pad_parity=pad.parity(), run_status=self.run_status,
+            entries=entries or {}, quotas=self._quota_state(runF, detF),
+            expected=world.expected_counts(c))
+        return snap
+
+    async def _mem_entries_count(self, mem):
+        text, mode = await mem.stats()
+        m = re.search(r"Memories:\s*(\d+)", text or "")
+        return (int(m.group(1)) if m else None), mode
 
     # ------------------------------------------------------------------
     async def finalize(self):
-        """Rebuild everything from disk and write the final report (no cycles)."""
+        """Rebuild everything from disk and write the final report (no cycles).
+        Endpoint verdicts come from experiments/analyze_v3.py, not here."""
         st = self._load_state()
         self.cycle = st.get("cycle", 0)
-        metrics = Metrics()
-        metrics.load_events(load_events(self.events_path))
+        self.run_status = st.get("run_status", "OK")
+        metricsF, metricsE = Metrics(), Metrics()
+        metricsF.load_events(load_events(self.events_path), arm="FULL")
+        metricsE.load_events(load_events(self.events_path), arm="EPI")
         self.ledger = Ledger(self.ledger_path)
-        det = InsightDetector(metrics, self.ledger, log)
-        det.load_dict(st.get("det", {}))
-        runner = CycleRunner(None, None, det, self.ledger, log)
-        runner.load_dict(st.get("runner", {}))
+        detF = InsightDetector(metricsF, self.ledger, log, signatures=False)
+        detE = InsightDetector(metricsE, self.ledger, log, signatures=False)
+        detF.load_dict(st.get("detF", {}))
+        detE.load_dict(st.get("detE", {}))
+        runF = CycleRunner(None, None, detF, self.ledger, log, arm="FULL")
+        runF.load_dict(st.get("runnerF", {}))
+        runE = CycleRunner(None, None, detE, self.ledger, log, arm="EPI")
+        runE.load_dict(st.get("runnerE", {}))
         with open(self.dl_path, encoding="utf-8") as f:
             dl = json.load(f)
-        mem = MemFacade(log)
-        await mem.start()
-        entries, _ = await self._mem_entries_count(mem)
-        self._adjudicate(det, runner, entries, metrics)
-        extra = reports.scan_events(self.run_dir)
-        snap = reports.build_snapshot(
-            self.cycle, dl["wall_start"], self.duration_h, self.max_cycles,
-            metrics, det, runner, self.ledger, mem.mode,
-            f"entries={entries}", None, end="finalized-after-crash",
-            ram_gb=ram_avail_gb())
-        snap.update(puz_methods=extra["puz_methods"], hits=extra["hits"],
-                    drifts_seen=extra["drifts_seen"],
-                    binned={l: reports._binned(metrics, l, self.cycle)
-                            for l in ("seqA", "seqB", "factA", "factB", "puzzle")})
-        reports.write_status(self.run_dir, reports.render(snap))
-        reports.write_final(self.run_dir, reports.render(snap, detail=True), "finalized")
-        log(f"[worker] finalized from disk at cycle {self.cycle}")
+        memF = MemFacade(log, C.MEM_URL)
+        memE = MemFacade(log, C.MEM_URL_EPI)
+        await memF.start()
+        await memE.start()
+        entries = {}
+        for arm, mem in (("FULL", memF), ("EPI", memE)):
+            n, _ = await self._mem_entries_count(mem)
+            entries[arm] = n
+        bad = self._engineering_check(runF, runE, entries)
+        if bad and self.run_status == "OK":
+            self.run_status = "ENGINEERING_INVALID:" + ";".join(bad)[:150]
+        pad = PadSync()
+        snap = self._snap(self.cycle, dl["wall_start"], metricsF, metricsE, detF,
+                          runF, runE, pad, memF, memE, None,
+                          end="finalized-after-crash", detail=True, entries=entries)
+        reports.write_status(self.run_dir, reports.render_v3(snap))
+        reports.write_final(self.run_dir, reports.render_v3(snap, detail=True),
+                            "finalized")
+        log(f"[worker] finalized from disk at cycle {self.cycle}; "
+            f"run_status={self.run_status}")
 
 
 def main():

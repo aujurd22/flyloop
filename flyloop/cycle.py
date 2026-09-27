@@ -1,24 +1,24 @@
-"""The seven-step cycle, one lap per iteration (v2.1):
+"""The seven-step cycle, one lap per iteration (v3).
 
-  1 EXPERIENCE  world emits events (fact query / puzzle probe / symbol arrival)
-  2 MEMORY      recall the right compartment (or state_lookup for arm B)
-  3 PREDICT     mechanical reasoner, or k-WTA net (streams A and B)
-  4 ERROR       score against the world's ground truth
-  5 UPDATE      corrections / table fold-in / book update / net steps
-  6 NEW EXPERIENCE  the world has drifted (rotations, shocks, regime shifts)
-  7 INSIGHT     rule abstractions + restructuring signatures -> ledger + memory
+v3 = Recurrent Drift x Memory Consolidation (V3_DESIGN.md):
 
-v2 fixes after two live-bug audits:
-  - payload-first text (never truncated): c= early, tables <= 78 chars;
-  - rules live in ONE global RULEBOOK entry (state_lookup, untruncated) with an
-    ASCII head — per-family rule entries collided with their own tables in the
-    merge zone (0.75<sim<=0.92), measured live: f0's rule was swallowed by the
-    table write that followed it (audit of runs/smoke_v2 DB);
-  - ALL text formats calibrated with the REAL emitters against MiniLM before
-    launch (tests/calibrate_texts.py): table cross-family 0.69, book-vs-any 0.57;
-  - dual seq streams A/B, fact A/B arms, read-back verification.
+  Two memory arms run the IDENTICAL world/probe schedule in the same process:
+    FULL — observation tables + the RULEBOOK (a rule registry: every rule ever
+           discovered, tagged with the epoch it was last active in)
+    EPI  — observation tables only; the book is off-limits. Every book write
+           the FULL arm makes is mirrored by a byte-exact padding write on the
+           EPI arm (PadSync), so both arms buy the same write pressure.
+
+  The recurrence shortcut under test: at an episode start the FULL arm may test
+  recent book candidates against live observations — one confirming pair adopts
+  an old rule ("book_test"), while the EPI arm must re-fit from two fresh pairs.
+  Wrong adoptions are the stale-intrusion cost, measured as SIR.
+
+Carried over from v2 (unchanged): payload-first text formats (truncation-proof),
+the real-emitter calibration discipline, fact A/B arms, dual seq streams.
 """
 import time
+from collections import deque
 
 from . import config as C
 from . import world
@@ -27,7 +27,44 @@ from .memclient import parse_ids, parse_recall
 
 # ASCII heads keep embeddings apart (measured) and survive any single-byte cut.
 HEADS = ["REDLOG", "BLUELOG", "GOLDLOG", "SILVERLOG"]
-BOOK_KEY = "flyloop/rulebook"
+# per-family book format: distinct CJK head + a family tag on EVERY rule line.
+# Measured (tests/calibrate_texts.py, real MiniLM): cross-family book sim 0.655
+# (< 0.75 merge line; the ASCII family words alone measured 0.90-0.93), book
+# update 0.98 (in-place rewrite), book-vs-table 0.73. Max length ~94 chars <
+# 120 (split_chunks threshold; >120 a state_key write is rejected by the v4
+# atomicity guard -- the smoke_v3_1790532091 autopsy).
+BOOK_HEADS = ["朱雀街的钟表铺，规律刻在黄铜齿轮上，一代代传下来",
+              "渡口的老账房，规则记在流水簿子里，从不涂改",
+              "山顶的观星台，定律写在发黄的星图之间",
+              "巷尾的裁缝铺，样式留在泛黄的纸样册里"]
+FAM_TAGS = ["红家", "蓝家", "金家", "银家"]
+BOOK_TAG = "RULEBOOK"
+
+
+class PadSync:
+    """FULL-arm book writes -> EPI-arm padding writes, 1:1 by count and bytes."""
+
+    def __init__(self):
+        self.queue = deque()
+        self.charged = 0
+        self.drained = 0
+
+    def charge(self, nbytes: int):
+        self.queue.append(nbytes)
+        self.charged += nbytes
+
+    def take(self):
+        """Pop the next owed padding size (one book write -> one pad write)."""
+        if self.queue:
+            n = self.queue.popleft()
+            self.drained += n
+            return n
+        return None
+
+    def parity(self) -> dict:
+        pending = sum(self.queue)
+        return {"charged": self.charged, "drained": self.drained,
+                "pending": pending, "pending_events": len(self.queue)}
 
 
 def table_text(fam, ep, c, pairs_str):
@@ -37,10 +74,25 @@ def table_text(fam, ep, c, pairs_str):
     return f"{HEADS[fam]} {C.PUZ_DESC[fam][:12]}【{pairs_str} | f{fam} {C.PUZ_WORDS[fam]} c={c} e{ep}】"
 
 
-def book_text(rules, c):
-    """One line, all family rules: rules = {fam: (epoch, a, b)}."""
-    parts = " ".join(f"f{f}={a}x+{b}m13e{ep}" for f, (ep, a, b) in sorted(rules.items()))
-    return f"RULEBOOK c={c} :: {parts}"
+def book_text_v3(fam, rules, c):
+    """One family's book entry: rules = {rid: {"a","b","ep"}} (capped at
+    BOOK_CAP most recent). Distinct CJK head + a family tag on every rule
+    line keeps cross-family and book-vs-table similarity below the merge
+    line (calibrated, see BOOK_HEADS note)."""
+    parts = []
+    for rid in sorted(rules[fam], key=lambda r: -rules[fam][r]["ep"])[:C.BOOK_CAP]:
+        r = rules[fam][rid]
+        parts.append(f"{FAM_TAGS[fam]}r{rid.split('r')[1]}={r['a']}x{r['b']}e{r['ep']}")
+    return f"{BOOK_HEADS[fam]} c={c} :: " + " ".join(parts)
+
+
+def book_state_key(fam):
+    return C.BOOK_STATE_KEY.format(fam=fam)
+
+
+def pad_text(nbytes: int, seq: int) -> str:
+    head = f"{C.PAD_HEAD} p{seq:06d} "
+    return (head + "z" * nbytes)[:max(nbytes, 1)]
 
 
 def fact_text(st, word, ch, c, desc):
@@ -51,24 +103,29 @@ def fam_query(fam):
     return f"{C.PUZ_DESC[fam][:16]} {C.PUZ_WORDS[fam]} 观测表 求解"
 
 
-def book_query():
-    return "RULEBOOK 规律 求解 f0 f1 f2 f3"
-
-
 class CycleRunner:
-    def __init__(self, mem, poets, det, ledger, log=print):
+    def __init__(self, mem, poets, det, ledger, log=print, arm="FULL",
+                 pad_sync=None, pad_seq=0):
         self.mem = mem
         self.poets = poets  # {"A": PoetLeg, "B": PoetLeg}
         self.det = det
         self.ledger = ledger
         self.log = log
+        self.arm = arm                 # "FULL" | "EPI"
+        self.pad_sync = pad_sync       # shared with the worker (FULL charges, EPI drains)
+        self.pad_seq = pad_seq
         self.disc = {}
-        self.book = {}   # fam -> (epoch, a, b)  (mirror of the RULEBOOK entry)
+        self.book = {}   # {fam: {rid: {"a","b","ep"}}}  (mirror of the RULEBOOK entry)
         self.counts = {"writes": 0, "recalls": 0, "noise": 0, "discoveries": 0,
                        "fact_writes": 0, "pair_writes": 0, "book_writes": 0,
-                       "rejected": 0, "cold": 0, "readback_fail": 0,
+                       "book_bytes": 0, "pad_writes": 0, "pad_bytes": 0,
+                       "rejected": 0, "cold": 0,
+                       "fact_readback_fail": 0, "rulebook_readback_fail": 0,
+                       "table_readback_fail": 0,
                        "factA_n": 0, "factB_n": 0, "factA_hit": 0, "factB_hit": 0,
-                       "puz_probes": 0}
+                       "puz_probes": 0, "book_test_uses": 0,
+                       "stale_intrusions": 0, "episodes": {"NEW": 0, "VARIANT": 0,
+                                                           "RECALL": 0}}
 
     # ------------------------------------------------------------------
     async def _remember(self, text, tags, compartment="", state_key="", state_value=""):
@@ -99,7 +156,8 @@ class CycleRunner:
     # ------------------------------------------------------------------
     async def run_cycle(self, c: int) -> dict:
         t0 = time.perf_counter()
-        rec = {"c": c, "t": time.strftime("%H:%M:%S"), "notes": []}
+        rec = {"c": c, "t": time.strftime("%H:%M:%S"), "notes": [],
+               "memory_arm": self.arm}
 
         drifts = world.all_drift_events(c)
         if drifts:
@@ -107,7 +165,8 @@ class CycleRunner:
             rec["drifts"] = [f"{d['lane']}:{d['kind']}:{d['who']}" for d in drifts]
         rec["mode"] = self.mem.mode
 
-        # ------------- sequence lane: dual streams A (hidden) / B (marker) ----
+        # ------------- sequence lane (CONTINUAL-LEARNING CONTROL; demoted per
+        # V3 §10 — kept identical in both arms, never load-bearing for verdicts)
         ctxA = world.seq_context(c)
         true_sym = world.seq_symbol(c)
         predA, errA = self.poets["A"].predict(ctxA)
@@ -139,8 +198,12 @@ class CycleRunner:
         else:
             await self._puzzle_leg(c, rec)
 
-        # ------------- distractor pressure ----------------
-        if c % C.NOISE_EVERY == 0:
+        # ------------- EPI arm: mirror the FULL arm's book writes ------------
+        if self.arm == "EPI" and self.pad_sync is not None:
+            await self._drain_padding(rec)
+
+        # ------------- distractor pressure (three phases, fixed in config) ----
+        if c % C.noise_every(c) == 0:
             await self._remember(world.distractor_text(c), tags="flyloop,noise",
                                  compartment=C.COMPARTMENT_NOISE)
             self.counts["noise"] += 1
@@ -193,39 +256,85 @@ class CycleRunner:
             if self.counts["fact_writes"] % 20 == 0:
                 ok = await self._readback(key, [(reasoner.P_FACT, str(st))], truth)
                 if not ok:
-                    self.counts["readback_fail"] += 1
+                    self.counts["fact_readback_fail"] += 1
                     rec["notes"].append("fact_readback_fail")
+
+    async def _drain_padding(self, rec):
+        """EPI arm only: mirror the FULL arm's book writes, byte for byte."""
+        n = self.pad_sync.take() if self.pad_sync else None
+        if n is None:
+            return
+        self.pad_seq += 1
+        text = pad_text(n, self.pad_seq)
+        await self._remember(text, tags="flyloop,pad",
+                             compartment=C.COMPARTMENT_NOISE,
+                             state_key=C.PAD_STATE_KEY, state_value=f"p{self.pad_seq}")
+        self.counts["pad_writes"] += 1
+        self.counts["pad_bytes"] += n
+        rec["notes"].append(f"pad:{n}")
 
     async def _puzzle_leg(self, c, rec):
         fam = (c // 2) % C.PUZ_FAMILIES
         word = C.PUZ_WORDS[fam]
         epoch = world.puz_epoch(fam, c)
+        wep = world.puz_episode(fam, c)
         (x1, y1), xp, truth = world.puz_probe(fam, c)
-        # tables via recall (compartment), the global book via state_lookup
+
+        d = self.disc.setdefault((fam, epoch), {
+            "consec": 0, "done": False, "table": {}, "table_id": None,
+            "unseen_since_write": 0, "probes": 0, "ep_counted": False,
+            "adopted": None})
+        probe_idx = d["probes"] + 1
+        if not d["ep_counted"]:
+            d["ep_counted"] = True
+            self.counts["episodes"][wep["type"]] += 1
+        # table dict keys are str (JSON round-trip through state.json); the
+        # reasoner needs int pairs
+        obs = [(int(k), v) for k, v in d["table"].items()]  # live observations
+
+        # memory reads
         block_t, _ = await self.mem.recall(
             fam_query(fam), compartment=C.COMPARTMENT_PUZZLE, top_k=C.PUZ_RECALL_TOPK)
-        block_b, _ = await self.mem.state_lookup(BOOK_KEY)
-        self.counts["recalls"] += 2
+        self.counts["recalls"] += 1
         entries = parse_recall(block_t)
-        y, method, eids, n_ver, ab = reasoner.predict_puzzle(entries, fam, epoch, xp)
-        if method == "cold":
-            book_rule = reasoner.parse_book(block_b, fam, epoch)
-            if book_rule:
-                a, b = book_rule
-                y, method, n_ver = (a * xp + b) % C.PUZ_P, "book", 1
-                ab = (a, b)
+        cands = None
+        if self.arm == "FULL":
+            block_b, _ = await self.mem.state_lookup(book_state_key(fam))
+            self.counts["recalls"] += 1
+            registry = reasoner.parse_book_v3(block_b, fam)
+            cands = reasoner.book_candidates(registry, C.BOOK_CAP)
+        y, method, eids, n_ver, ab, aux = reasoner.predict_puzzle_v3(
+            entries, fam, epoch, xp, cands=cands, obs=obs)
+
+        stale_present = bool(cands) if self.arm == "FULL" else \
+            any(int(m.group(5)) != epoch for m in
+                [reasoner.P_PAIRS.search(t) for _, t in entries]
+                if m and int(m.group(2)) == fam)
         err = 1 if (y is None or y != truth) else 0
-        rec.update(puz_err=err, puz_method=method, puz_fam=fam,
-                   puz_hit=int(method in ("rule", "fit", "book")))
+        stale_intrusion = int(err == 1 and (
+            method == "book_test" or method == "fit_stale" or method == "rule"))
+        rec.update(lane="puzzle",
+                   episode_type=wep["type"], family=fam, epoch=epoch,
+                   rule_id=wep["rule_id"], rule_age=(wep["gap"] if wep["type"] == "RECALL" else 0),
+                   probe_idx=probe_idx,
+                   prediction=y, truth=truth, error=err,
+                   method=method, retrieval_rank=aux.get("book_rank"),
+                   stale_candidate_present=int(bool(stale_present)),
+                   stale_intrusion=stale_intrusion,
+                   discovery=False, useful_insight=None)
         self.counts["puz_probes"] += 1
+        if method == "book_test":
+            self.counts["book_test_uses"] += 1
+        if stale_intrusion:
+            self.counts["stale_intrusions"] += 1
+            rec["notes"].append(f"stale:{aux.get('rule_id') or method}")
         if method == "cold":
             self.counts["cold"] += 1
         if err:
             rec["notes"].append(f"puz:{y}!={truth}({method})")
 
-        d = self.disc.setdefault((fam, epoch), {
-            "consec": 0, "done": False, "table": {}, "table_id": None, "unseen_since_write": 0})
         # table fold-in: keep the freshest pairs; write every Nth probe or on error
+        d["probes"] += 1
         d["table"][str(x1)] = y1
         d["unseen_since_write"] += 1
         if err or d["unseen_since_write"] >= C.TABLE_WRITE_EVERY:
@@ -241,43 +350,77 @@ class CycleRunner:
             ids = parse_ids(resp)
             if ids:
                 d["table_id"] = ids[-1]
-        # discovery -> RULEBOOK update (single global entry, state_lookup read)
-        if method == "fit" and n_ver >= 1:
+            if self.counts["pair_writes"] % 20 == 0:
+                try:
+                    rb, _ = await self.mem.state_lookup(
+                        reasoner.STATE_KEY_TABLE.format(fam=fam))
+                    ok = bool(rb) and f"e{epoch}" in rb and bool(reasoner.P_PAIRS.search(rb))
+                except Exception:
+                    ok = False
+                if not ok:
+                    self.counts["table_readback_fail"] += 1
+                    rec["notes"].append("table_readback_fail")
+
+        # discovery / re-activation -> RULEBOOK update (FULL arm only)
+        if method == "fit" and err == 0 and n_ver >= 1:
             d["consec"] += 1
-        elif method not in ("rule", "book"):
+        elif method in ("book_test", "rule") and err == 0:
+            d["consec"] += 1
+        else:
             d["consec"] = 0
-        if d["consec"] >= C.PUZ_DISC_CONSEC and not d["done"] and ab:
+        if (self.arm == "FULL" and d["consec"] >= C.PUZ_DISC_CONSEC
+                and not d["done"] and ab):
             d["done"] = True
             a, b = ab
-            self.book[fam] = (epoch, a, b)
+            rid = wep["rule_id"]
+            fam_book = self.book.setdefault(fam, {})
+            prev = fam_book.get(rid)
+            is_reactivation = prev is not None and (prev["a"], prev["b"]) == (a, b)
+            fam_book[rid] = {"a": a, "b": b, "ep": epoch}
+            # cap: keep only the BOOK_CAP most recent rules of this family
+            if len(fam_book) > C.BOOK_CAP:
+                for old_rid in sorted(fam_book, key=lambda r: fam_book[r]["ep"])[
+                        :len(fam_book) - C.BOOK_CAP]:
+                    del fam_book[old_rid]
+            text = book_text_v3(fam, self.book, c)
             resp, _ = await self._remember(
-                book_text(self.book, c), tags="flyloop,insight,rule",
-                compartment=C.COMPARTMENT_RULE, state_key=BOOK_KEY,
-                state_value=f"n{len(self.book)}")
+                text, tags="flyloop,insight,rule",
+                compartment=C.COMPARTMENT_RULE, state_key=book_state_key(fam),
+                state_value=f"n{len(fam_book)}")
             self.counts["book_writes"] += 1
-            # read-back: this family's rule must be visible in the book
-            rule_in_book = False
+            nbytes = len(text.encode("utf-8"))
+            self.counts["book_bytes"] += nbytes
+            if self.pad_sync is not None:
+                self.pad_sync.charge(nbytes)
+            # read-back: this family's rules must be visible in its book entry
             try:
-                rb, _ = await self.mem.state_lookup(BOOK_KEY)
-                rule_in_book = reasoner.parse_book(rb, fam, epoch) == (a, b)
+                rb, _ = await self.mem.state_lookup(book_state_key(fam))
+                got = reasoner.parse_book_v3(rb, fam)
+                ok = any(r[0] == rid and (r[1], r[2]) == (a, b) for r in got)
             except Exception:
-                pass
-            if not rule_in_book:
-                self.counts["readback_fail"] += 1
+                ok = False
+            if not ok:
+                self.counts["rulebook_readback_fail"] += 1
                 rec["notes"].append("book_readback_fail")
             self.det.on_discovery(c, fam, epoch, a, b, [d["table_id"]])
             self.counts["discoveries"] += 1
-            rec["notes"].append(f"DISCOVERY fam={fam} ep={epoch} a={a} b={b}")
-            self.log(f"[c{c}] INSIGHT rule_discovery fam={fam}({word}) ep={epoch} "
-                     f"y=({a}x+{b}) mod {C.PUZ_P} (book has {len(self.book)} rules)")
+            kind = "REACTIVATION" if is_reactivation else "DISCOVERY"
+            rec["discovery"] = True
+            rec["notes"].append(
+                f"{kind} fam={fam} ep={epoch} rid={rid} a={a} b={b}")
+            self.log(f"[c{c}] INSIGHT {kind} fam={fam}({word}) ep={epoch} rid={rid} "
+                     f"y=({a}x+{b}) mod {C.PUZ_P} (book has "
+                     f"{sum(len(v) for v in self.book.values())} rules)")
 
     # ------------------------------------------------------------------
     def to_dict(self):
         return {"disc": {f"{k[0]}:{k[1]}": v for k, v in self.disc.items()},
                 "counts": self.counts,
-                "book": {str(k): list(v) for k, v in self.book.items()}}
+                "book": {str(k): v for k, v in self.book.items()},
+                "arm": self.arm, "pad_seq": self.pad_seq}
 
     def load_dict(self, d):
         self.disc = {tuple(map(int, k.split(":"))): v for k, v in d.get("disc", {}).items()}
         self.counts = d.get("counts", self.counts)
-        self.book = {int(k): tuple(v) for k, v in (d.get("book") or {}).items()}
+        self.book = {int(k): v for k, v in (d.get("book") or {}).items()}
+        self.pad_seq = d.get("pad_seq", 0)

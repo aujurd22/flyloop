@@ -120,19 +120,114 @@ def seq_b_context(cycle: int, ctx: int = None) -> list:
 
 
 # ---------------------------------------------------------------- puzzle lane --
+# v3: episodes follow a PRECOMPUTED recurrent schedule (V3 spec §4). Every
+# family walks a sequence of NEW / VARIANT / RECALL episodes; the schedule is a
+# pure function of SEED (recomputable after a crash, identical for both memory
+# arms) and is also dumped as a run artifact for audit.
 def puz_period(fam: int) -> int:
     return C.PUZ_PERIOD0 + C.PUZ_PERIOD_STEP * fam
+
+
+_SCHEDULE = None
+
+
+def puz_schedule():
+    """{fam: [episode, ...]} where episode = {i, type, rule_id, a, b, gap}.
+
+    NEW     fresh (a,b), never used in this family (future RECALL candidate)
+    VARIANT fresh (a,b) drawn NEAR the previous rule (nonzero deltas) — the
+            stale-memory trap and the NC1 negative control
+    RECALL  the exact rule active k epochs ago, k ~ uniform{2,3,4,5}
+    """
+    global _SCHEDULE
+    if _SCHEDULE is not None:
+        return _SCHEDULE
+    sched = {}
+    for fam in range(C.PUZ_FAMILIES):
+        rng = _rng("puz", "sched", fam)
+        episodes = []
+        used = set()
+        by_index = {}          # epoch -> rule_id
+        rules = {}             # rule_id -> (a, b)
+        counter = 0
+        for i in range(C.MAX_EPISODES):
+            u = float(rng.random())
+            if i == 0:
+                typ = "NEW"
+            else:
+                can_recall = i >= min(C.RECALL_GAPS)
+                if can_recall and u < C.EPISODE_MIX["NEW"]:
+                    typ = "NEW"
+                elif can_recall and u < C.EPISODE_MIX["NEW"] + C.EPISODE_MIX["VARIANT"]:
+                    typ = "VARIANT"
+                elif can_recall:
+                    typ = "RECALL"
+                else:
+                    typ = "NEW" if u < 0.5 else "VARIANT"
+            gap = 0
+            if typ == "RECALL":
+                valid = [g for g in C.RECALL_GAPS if g <= i]
+                gap = int(rng.choice(valid))
+                src = i - gap
+                rid = by_index[src]
+                a, b = rules[rid]
+            elif typ == "VARIANT":
+                pa, pb = episodes[-1]["a"], episodes[-1]["b"]
+                a = (pa + int(rng.choice([1, 2, C.PUZ_P - 1, C.PUZ_P - 2]))) % C.PUZ_P
+                b = (pb + int(rng.choice([1, 2, 3, C.PUZ_P - 1, C.PUZ_P - 2, C.PUZ_P - 3]))) % C.PUZ_P
+                rid = f"f{fam}r{counter}"; counter += 1
+                rules[rid] = (a, b)
+            else:  # NEW
+                # only p*(p-1) = 156 distinct rules exist per family; cap the
+                # draw and fall back to the least-recently-used pair (the cap
+                # cannot bind statistically: NEW ~ 0.5 * MAX_EPISODES << 156)
+                for _ in range(200):
+                    a = int(rng.integers(1, C.PUZ_P))
+                    b = int(rng.integers(0, C.PUZ_P))
+                    if (a, b) not in used:
+                        break
+                else:
+                    a, b = episodes[-1]["a"], episodes[-1]["b"]
+                    typ = "VARIANT"
+                    rid = f"f{fam}r{counter}"; counter += 1
+                    rules[rid] = (a, b)
+                    used.add((a, b))
+                    by_index[i] = rid
+                    episodes.append({"i": i, "type": typ, "rule_id": rid,
+                                     "a": a, "b": b, "gap": 0})
+                    continue
+                rid = f"f{fam}r{counter}"; counter += 1
+                rules[rid] = (a, b)
+            used.add((a, b))
+            by_index[i] = rid
+            episodes.append({"i": i, "type": typ, "rule_id": rid,
+                             "a": a, "b": b, "gap": gap})
+        sched[fam] = episodes
+    _SCHEDULE = sched
+    return sched
 
 
 def puz_epoch(fam: int, cycle: int) -> int:
     return cycle // puz_period(fam)
 
 
+def puz_episode(fam: int, cycle: int) -> dict:
+    return puz_schedule()[fam][puz_epoch(fam, cycle)]
+
+
 def puz_rule(fam: int, cycle: int):
-    r = _rng("puz", "rule", fam, puz_epoch(fam, cycle))
-    a = int(r.integers(1, C.PUZ_P))
-    b = int(r.integers(0, C.PUZ_P))
-    return a, b
+    ep = puz_episode(fam, cycle)
+    return ep["a"], ep["b"]
+
+
+def puz_episode_counts(cycle: int) -> dict:
+    """Cumulative NEW/VARIANT/RECALL episode starts at or before `cycle`."""
+    counts = {"NEW": 0, "VARIANT": 0, "RECALL": 0}
+    for fam in range(C.PUZ_FAMILIES):
+        n = min(puz_epoch(fam, cycle) + 1, C.MAX_EPISODES)
+        for ep in puz_schedule()[fam][:n]:
+            counts[ep["type"]] += 1
+    return counts
 
 
 def puz_rotation_cycle(fam: int, epoch: int) -> int:
@@ -191,6 +286,7 @@ def expected_counts(cycles: int) -> dict:
     return {
         "fact_rotations": total_fact_rotations_before(cycles),
         "puz_rotations": sum(cycles // puz_period(f) for f in range(C.PUZ_FAMILIES)),
+        "episodes": puz_episode_counts(cycles),
         "seq_shifts": cycles // C.SEQ_REGIME_LEN,
         "shocks": cycles // C.FACT_SHOCK_EVERY,
     }

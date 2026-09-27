@@ -50,6 +50,68 @@ def ledger_table(ledger):
     return "\n".join(rows)
 
 
+def _arm_block(arm, stats):
+    """One memory arm's key numbers for the v3 status render."""
+    m = stats["metrics"]
+    c = stats["counts"]
+    err = {lane: s.get("err100") for lane, s in m.items()}
+    return (f"- **{arm}**: puzzle err100={err.get('puzzle')} "
+            f"factA={err.get('factA')} factB={err.get('factB')} "
+            f"seqA={err.get('seqA')} seqB={err.get('seqB')} | "
+            f"probes={c.get('puz_probes')} discoveries={c.get('discoveries')} "
+            f"book_test={c.get('book_test_uses')} stale={c.get('stale_intrusions')} "
+            f"cold={c.get('cold')} | episodes={c.get('episodes')} | "
+            f"writes={c.get('writes')} (fact {c.get('fact_writes')}, pairs "
+            f"{c.get('pair_writes')}, book {c.get('book_writes')}, pads "
+            f"{c.get('pad_writes')}, noise {c.get('noise')}) | readback fails "
+            f"fact={c.get('fact_readback_fail')} book={c.get('rulebook_readback_fail')} "
+            f"table={c.get('table_readback_fail')}")
+
+
+def render_v3(snap, detail=False):
+    L = []
+    L.append(f"# flyloop v3 status — {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    L.append("")
+    L.append(f"- cycle **{snap['cycle']}**，elapsed **{snap['elapsed_h']:.2f} h** / "
+             f"{snap['duration_h']:.0f} h，memory **FULL {snap.get('mode')}**，"
+             f"end: {snap.get('end', 'running')}，RAM avail {snap.get('ram_gb', '?')} GB")
+    L.append(f"- run_status: **{snap.get('run_status', 'OK')}**")
+    q = snap.get("quotas", {})
+    L.append(f"- quotas (need N{C.QUOTA_NEW}/V{C.QUOTA_VARIANT}/R{C.QUOTA_RECALL}/"
+             f"s{C.QUOTA_SHOCKS}): {q}")
+    pp = snap.get("pad_parity")
+    if pp:
+        L.append(f"- write parity (FULL book vs EPI pads): {pp}")
+    en = snap.get("entries")
+    if en:
+        L.append(f"- memory entries: {en}")
+    L.append("")
+    L.append("## arms (rolling err100)")
+    for arm in ("FULL", "EPI"):
+        L.append(_arm_block(arm, snap["arm_stats"][arm]))
+    L.append("")
+    if detail:
+        L.append("## FULL bins (1k cycles)")
+        for lane in ("puzzle", "factA", "factB", "seqA", "seqB"):
+            bins = snap.get("binned", {}).get(lane)
+            if bins:
+                cells = " | ".join(f"{lo//1000}k:{v}" for lo, v in bins if v is not None)
+                L.append(f"- {lane}: {cells}")
+        L.append("")
+        if snap.get("insights"):
+            L.append(f"## FULL insights ({len(snap['insights'])})")
+            for ins in snap["insights"][-30:]:
+                L.append(f"- c{ins['cycle']} fam={ins['family']} ep={ins['epoch']} "
+                         f"rule `{ins['rule']}`")
+            L.append("")
+        if snap.get("expected"):
+            L.append(f"- world expectation: {snap['expected']}")
+        L.append("## prediction ledger")
+        L.append(ledger_table(snap["ledger"]))
+        L.append("")
+    return "\n".join(L) + "\n"
+
+
 def render(snap, detail=False):
     L = []
     L.append(f"# flyloop status — {time.strftime('%Y-%m-%d %H:%M:%S')}")

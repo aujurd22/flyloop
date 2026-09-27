@@ -37,7 +37,9 @@ class PoetLeg:
         self.model = GPT(V_in, d=C.SEQ_D, layers=C.SEQ_LAYERS, heads=C.SEQ_HEADS,
                          ffn_h=C.SEQ_FFN, seq=seq_len,
                          kwta_opts=kwta_opts).to(self.device)
-        g = torch.Generator().manual_seed(C.SEED + (1 if tag == "A" else 2))
+        # stream identity, not arm: FULL-A and EPI-A share init (paired arms),
+        # A and B differ (different streams)
+        g = torch.Generator().manual_seed(C.SEED + (1 if tag.endswith("A") else 2))
         self.masks = {}
         for name, p in self.model.named_parameters():
             m = torch.rand(p.shape, generator=g) < C.SEQ_TRAIN_FRAC

@@ -53,26 +53,32 @@ def ram_avail_gb():
     return m.ullAvailPhys / 2**30
 
 
-def spawn_service():
+def spawn_service(port: int, db_path: str):
     subprocess.Popen(
-        [C.PYTHONW, "mcp_v3.py", "--http", "--port", str(C.MEM_PORT)],
+        [C.PYTHONW, "mcp_v3.py", "--http", "--port", str(port), "--db", db_path],
         cwd=C.SANDBOX_MEM_DIR, creationflags=DETACHED | CREATE_NO_WINDOW,
         close_fds=True)
-    tlog(f"[service] spawned sandbox flymemory on port {C.MEM_PORT}")
+    tlog(f"[service] spawned sandbox flymemory on port {port} db={db_path}")
 
 
-def ensure_service(timeout=90):
-    if port_open(C.MEM_HOST, C.MEM_PORT):
-        tlog(f"[service] already up on {C.MEM_PORT}")
+def ensure_service(port: int, db_path: str, timeout=90):
+    if port_open(C.MEM_HOST, port):
+        tlog(f"[service] already up on {port}")
         return
-    spawn_service()
+    spawn_service(port, db_path)
     t0 = time.time()
     while time.time() - t0 < timeout:
-        if port_open(C.MEM_HOST, C.MEM_PORT):
+        if port_open(C.MEM_HOST, port):
             tlog("[service] port is up")
             return
         time.sleep(3)
     tlog("[service] WARNING: port still down; worker will degrade to local mirror")
+
+
+def ensure_services(run_dir):
+    """One store per memory arm (v3): FULL on MEM_PORT, EPI on MEM_PORT_EPI."""
+    ensure_service(C.MEM_PORT, os.path.join(run_dir, "mem_FULL.pkl"))
+    ensure_service(C.MEM_PORT_EPI, os.path.join(run_dir, "mem_EPI.pkl"))
 
 
 def finalize(run_dir, duration_h):
@@ -108,7 +114,7 @@ def main():
     except OSError:
         pass
 
-    ensure_service()
+    ensure_services(run_dir)
 
     start = time.time()
     deadline = start + args.duration_h * 3600
@@ -149,8 +155,11 @@ def main():
             if time.time() - last_service_check > 20:
                 last_service_check = time.time()
                 if not port_open(C.MEM_HOST, C.MEM_PORT):
-                    tlog("[service] down mid-run; respawning (idempotent)")
-                    spawn_service()
+                    tlog("[service] FULL down mid-run; respawning (idempotent)")
+                    spawn_service(C.MEM_PORT, os.path.join(run_dir, "mem_FULL.pkl"))
+                if not port_open(C.MEM_HOST, C.MEM_PORT_EPI):
+                    tlog("[service] EPI down mid-run; respawning (idempotent)")
+                    spawn_service(C.MEM_PORT_EPI, os.path.join(run_dir, "mem_EPI.pkl"))
         rc = proc.returncode
         tlog(f"[supervisor] worker exited rc={rc}")
 

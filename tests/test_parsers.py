@@ -12,7 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from flyloop import config as C
 from flyloop import reasoner as R
-from flyloop.cycle import table_text, book_text, fact_text, BOOK_KEY
+from flyloop.cycle import (table_text, book_text_v3, fact_text,  # noqa: E402
+                           fam_query, book_state_key)
 from flyloop.world import puz_probe, puz_rule, fact_channel  # noqa: F401
 
 TRUNC = 80  # recall truncation in mcp_v3.py
@@ -60,18 +61,37 @@ check("table_len<=80", maxlen <= 80, f"maxlen={maxlen}")
 maxf = max(len(fact_text(i, C.FACT_WORDS[i], "A", 99999, C.FACT_DESC[i])) for i in range(24))
 check("fact_len<=90", maxf <= 90, f"maxlen={maxf}")
 
-# ---- book: parse for all families, epochs; survives truncation too -----------
+# ---- book (v3, ONE entry PER FAMILY, capped at the most recent rules): the
+# ---- entry must stay under the 120-char chunk-splitter threshold forever ------
 bad = []
-rules = {0: (65, 10, 8), 1: (52, 3, 7), 2: (43, 4, 11), 3: (37, 8, 1)}
-bk = book_text(rules, 53100)
-for fam, (ep, a, b) in rules.items():
-    if R.parse_book(bk, fam, ep) != (a, b):
-        bad.append(("full", fam))
-    if R.parse_book(bk[:TRUNC], fam, ep) != (a, b):
-        bad.append(("trunc", fam))
-check("book_parses_all_families_full_and_truncated", not bad, str(bad))
-check("book_stale_epoch_rejected", R.parse_book(bk, 0, 64) is None)
-check("book_len<=80", len(bk) <= 80, f"len={len(bk)}")
+rules = {0: {"f0r1": {"a": 10, "b": 8, "ep": 65}, "f0r2": {"a": 2, "b": 3, "ep": 71}},
+         1: {"f1r1": {"a": 3, "b": 7, "ep": 52}},
+         2: {"f2r1": {"a": 4, "b": 11, "ep": 43}},
+         3: {"f3r1": {"a": 8, "b": 1, "ep": 37}}}
+bk = book_text_v3(0, rules, 53100)
+reg = R.parse_book_v3(bk, 0)
+if ("f0r2", 2, 3, 71) not in reg or ("f0r1", 10, 8, 65) not in reg:
+    bad.append(("registry", 0))
+check("book_v3_parses_family_entry", not bad, str(bad))
+# wrong family's tags inside the block are ignored
+check("book_v3_ignores_other_family_tags",
+      all(r[0].startswith("f0") for r in reg))
+# current-epoch candidates: epoch 71 current -> f0r1 is the test candidate
+cands = R.book_candidates(reg, C.BOOK_CAP)
+check("book_v3_candidates_ordered_by_recency",
+      [c[0] for c in cands] == ["f0r2", "f0r1"], str(cands))
+# the split_chunks atomicity hazard: a full BOOK_CAP entry must stay one chunk
+import sys as _sys
+_sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))), "sandbox_mem", "flymemory"))
+try:
+    from v3 import split_chunks  # noqa: E402
+except ImportError:
+    from flymemory.v3 import split_chunks  # noqa: E402
+big = {0: {f"f0r{i+1}": {"a": 1, "b": i % 13, "ep": i} for i in range(5)}}
+bk_full = book_text_v3(0, big, 99999)
+check("book_v3_full_cap_single_chunk", len(split_chunks(bk_full)) == 1,
+      f"len={len(bk_full)} chunks={len(split_chunks(bk_full))}")
 
 # ---- reasoner end-to-end on synthetic entries --------------------------------
 a_true, b_true = 10, 8

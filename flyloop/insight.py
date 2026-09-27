@@ -49,20 +49,29 @@ class Metrics:
             out[lane] = {"n": len(d), "err100": round(r, 4) if r is not None else None}
         return out
 
-    def load_events(self, records):
+    def load_events(self, records, arm=None):
+        """Rebuild metrics from events.jsonl. With arm set, only records of
+        that memory arm are pooled (v3 runs both arms in one event log)."""
         for rec in records:
             c = rec.get("c")
             if c is None:
                 continue
-            for lane, keys in (("seqA", ("seqA_err", "seq_err")),
+            if arm is not None and rec.get("memory_arm", "FULL") != arm:
+                continue
+            for lane, keys in (("seqA", ("seqA_err",)),
                                ("seqB", ("seqB_err",)),
-                               ("factA", ("factA_err", "fact_err")),
+                               ("factA", ("factA_err",)),
                                ("factB", ("factB_err",)),
                                ("puzzle", ("puz_err",))):
+                v = None
                 for k in keys:
                     if rec.get(k) is not None:
-                        self.add(c, lane, rec[k])
+                        v = rec[k]
                         break
+                if v is None and lane == "puzzle" and rec.get("lane") == "puzzle":
+                    v = rec.get("error")   # v3 field layout
+                if v is not None:
+                    self.add(c, lane, v)
 
 
 class Ledger:
@@ -113,10 +122,11 @@ class Ledger:
 
 
 class InsightDetector:
-    def __init__(self, metrics: Metrics, ledger: Ledger, log=print):
+    def __init__(self, metrics: Metrics, ledger: Ledger, log=print, signatures=True):
         self.m = metrics
         self.ledger = ledger
         self.log = log
+        self.signatures = signatures  # v3: off (endpoints live in analyze_v3.py)
         self.drift_open = []   # drift records still inside their observation window
         self.drift_done = []   # closed records
         self.insights = []     # insight events (rule abstractions etc.)
@@ -171,6 +181,8 @@ class InsightDetector:
         self.insights.append(ins)
         if len(self.insights) > 300:
             self.insights = self.insights[-200:]
+        if not self.signatures:
+            return None
         eid = self.ledger.register(
             claim=(f"fam{family} ep{epoch} signature: rolling puzzle err over "
                    f"[d+10,d+70] <= 0.6 x rolling err over [d-70,d] (d={cycle})"),

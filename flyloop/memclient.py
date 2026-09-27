@@ -21,12 +21,13 @@ class ServiceDown(Exception):
 class MemClient:
     """Persistent MCP streamable-http session with one-shot reconnect."""
 
-    def __init__(self):
+    def __init__(self, url: str = None):
+        self.url = url or C.MEM_URL
         self._http_ctx = None
         self.session = None
 
     async def connect(self):
-        self._http_ctx = streamablehttp_client(C.MEM_URL)
+        self._http_ctx = streamablehttp_client(self.url)
         read, write, _ = await self._http_ctx.__aenter__()
         self.session = ClientSession(read, write)
         await self.session.__aenter__()
@@ -116,8 +117,8 @@ def parse_recall(block: str):
 
 
 class MemFacade:
-    def __init__(self, log=print):
-        self.client = MemClient()
+    def __init__(self, log=print, url: str = None):
+        self.client = MemClient(url)
         self.local = LocalMirror()
         self.mode = "local"
         self.log = log
@@ -127,7 +128,7 @@ class MemFacade:
         try:
             await self.client.connect()
             self.mode = "http"
-            self.log(f"[mem] connected to {C.MEM_URL}")
+            self.log(f"[mem] connected to {self.client.url}")
         except Exception as e:
             self.mode = "local"
             self.log(f"[mem] service down at start ({e}); degrading to local mirror")
