@@ -119,3 +119,33 @@ refuses to adjudicate endpoints on an invalid run.
    needs int pairs (obs built with int(k)).
 5. Everything from v2: payload-first formats (80-char recall truncation),
    real-emitter calibration before launch, state_lookup reads untruncated.
+
+## 8. V4 queue (registered 2026-09-28, post-review — designs only, none started)
+
+1. **P06 done right — discovery-failure variation.** V3's decisive flaw: FULL
+   abstracted 100% of recurring rules, so the discovered-vs-undiscovered
+   contrast (the only valid test of "the abstraction itself pays") had zero
+   variation. V4 world: harder rules (quadratic mod p / GF(2^k) affine),
+   faster rotations, or stricter consec so a measurable fraction of rules
+   stays unabstracted; pre-register: dE20(recurrences of discovered rules) >
+   dE20(recurrences of undiscovered rules), cluster bootstrap by rule.
+   DISCOVERY and REACTIVATION are separate event kinds (cycle.py now emits
+   insight_kind); UIR uses first-discovery cycle strictly.
+2. **Representation × algorithm disentanglement.** V3 introduced the registry
+   and the one-pair matcher together. V4 arm M (matched): episodic memory +
+   the SAME candidate-scoring/decision rule over raw observation entries —
+   only the stored representation differs (compressed rule vs raw pairs).
+   If M ≈ F >> E, the mechanism is the matcher; if F >> M ≈ E, it is the
+   compressed representation. Either answer is a result.
+3. **Inference discipline**: cluster bootstrap by rule lineage is now the
+   default (analyze_v3.py); episode-iid CIs are reported only for comparison.
+   Time-ordering dependence of a continual learner is acknowledged, not
+   bootstrapped away.
+4. **Phase boundaries from pilot throughput** (or event-quota-gated phases);
+   never again a cycle threshold beyond the reachable budget (P07/P8 lesson).
+5. **Zero-observation recognition**: query the book BEFORE the first probe
+   (the probe query itself carries the family identity — the retrieval
+   interface, not the memory, was the bottleneck for probe-1 recovery).
+6. **A different math world** (after 1–2): polynomials over GF, graph-local
+   rules, or combinatorial constraints — test whether structured-memory
+   recurrence reuse survives outside y=(ax+b) mod 13.

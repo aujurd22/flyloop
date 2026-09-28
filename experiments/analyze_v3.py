@@ -89,6 +89,55 @@ def boot_ci(deltas, n_boot=10000, seed=7):
         float(np.percentile(means, 97.5))
 
 
+def load_insights(run_dir):
+    """First-discovery cycle per rule_id, from DISCOVERY notes only
+    (REACTIVATION = a book write for an already-registered rule — it is not
+    the insight event that can prefix a future recurrence)."""
+    import re as _re
+    first = {}
+    n_react = 0
+    path = os.path.join(run_dir, "events.jsonl")
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            for note in r.get("notes", []):
+                m = _re.match(r"(DISCOVERY|REACTIVATION) fam=\d+ ep=\d+ rid=(\S+)", note)
+                if not m:
+                    continue
+                if m.group(1) == "DISCOVERY":
+                    rid = m.group(2)
+                    c = r.get("c")
+                    if rid not in first or c < first[rid]:
+                        first[rid] = c
+                else:
+                    n_react += 1
+    return first, n_react
+
+
+def boot_ci_clustered(deltas, clusters, n_boot=10000, seed=7):
+    """Cluster bootstrap: resample CLUSTERS (rule lineages) with replacement,
+    pool all episodes of the drawn clusters. Episode-iid bootstrap would
+    understate uncertainty when the same rule is recalled repeatedly (the
+    reviewer's point on V3-P01/P02)."""
+    rng = np.random.default_rng(seed)
+    if len(deltas) == 0:
+        return None, None, None
+    deltas = np.asarray(deltas, dtype=float)
+    clusters = np.asarray(clusters)
+    uniq = np.unique(clusters)
+    by_c = {u: deltas[clusters == u] for u in uniq}
+    means = []
+    for _ in range(n_boot):
+        draw = rng.choice(uniq, size=len(uniq), replace=True)
+        pooled = np.concatenate([by_c[u] for u in draw])
+        means.append(float(pooled.mean()))
+    return float(deltas.mean()), float(np.percentile(means, 2.5)), \
+        float(np.percentile(means, 97.5))
+
+
 def perm_p(deltas, n=20000, seed=7):
     rng = np.random.default_rng(seed)
     if len(deltas) == 0:
@@ -121,35 +170,43 @@ def sir(arms):
     return out
 
 
-def useful_insight(arms, n_perm=1000, seed=11):
-    """UIR: fraction of discovered rules whose recurrences show E20 benefit for
-    FULL. Null = rule->recurrence assignment permuted across rules."""
+def useful_insight(arms, first_disc, n_perm=1000, seed=11):
+    """UIR, temporally strict (post-review fix): a discovery counts as useful
+    only for RECALL episodes that START AFTER the rule's first DISCOVERY
+    (REACTIVATION episodes and same-episode benefit no longer contaminate).
+    Null: per rule, pseudo-recurrences drawn from that rule's temporally
+    eligible RECALL pool."""
     F, E = arms["FULL"], arms["EPI"]
-    discovered = set()
-    for ep in F.values():
-        for p in ep["probes"]:
-            if p["discovery"] and p["rule_id"]:
-                discovered.add(p["rule_id"])
     recurrences = {}
     for k, ep in F.items():
-        if ep["type"] == "RECALL" and ep["rule_id"] in discovered:
-            recurrences.setdefault(ep["rule_id"], []).append(k)
+        rid = ep["rule_id"]
+        if (ep["type"] == "RECALL" and rid in first_disc
+                and ep["start_c"] is not None
+                and ep["start_c"] > first_disc[rid]):
+            recurrences.setdefault(rid, []).append(k)
+    pool = {rid: [k for k, ep in F.items()
+                  if ep["type"] == "RECALL" and ep["rule_id"] == rid
+                  and ep["start_c"] is not None and ep["start_c"] > first_disc[rid]]
+            for rid in recurrences}
     def benefit(rule, keys):
         f = np.mean([F[k]["e20"] for k in keys])
         e = np.mean([E[k]["e20"] for k in keys if k in E])
         return e > f
-    rules = sorted(r for r in discovered if r in recurrences)
+    rules = sorted(recurrences)
     if not rules:
         return None, None
     uir = float(np.mean([benefit(r, recurrences[r]) for r in rules]))
-    all_rec = [recurrences[r] for r in rules]
     rng = np.random.default_rng(seed)
-    pool = [k for k in F if F[k]["type"] == "RECALL"]
     null = []
     for _ in range(n_perm):
-        draw = [pool[i] for i in rng.integers(0, len(pool), size=len(all_rec))]
-        null.append(float(np.mean([benefit(rules[i], [draw[i]])
-                                   for i in range(len(rules))])))
+        vals = []
+        for r in rules:
+            p = pool[r]
+            if not p:
+                continue
+            draw = [p[i] for i in rng.integers(0, len(p), size=len(recurrences[r]))]
+            vals.append(benefit(r, draw))
+        null.append(float(np.mean(vals)) if vals else 0.0)
     return uir, float(np.percentile(null, 95))
 
 
@@ -245,6 +302,7 @@ def main():
     args = ap.parse_args()
     run_dir = os.path.abspath(args.run_dir)
     arms = load_probes(run_dir)
+    first_disc, n_react = load_insights(run_dir)
     lines = []
 
     def say(s=""):
@@ -267,19 +325,45 @@ def main():
 
     results = {}
 
-    # ---- P1 / P2: RECALL primary endpoints
-    dE, _ = paired(arms, "RECALL", "e20")
-    dT, _ = paired(arms, "RECALL", "latency")
-    mE, loE, hiE = boot_ci(dE, args.boot)
+    # ---- P1 / P2: RECALL primary endpoints (cluster bootstrap by rule
+    # lineage + per-family breakdown; episode-iid CIs kept for reference)
+    def _deltas_with_clusters(metric, etype="RECALL"):
+        F, E = arms["FULL"], arms["EPI"]
+        keys = sorted(set(F) & set(E))
+        d, cl = [], []
+        for k in keys:
+            if F[k]["type"] != etype:
+                continue
+            d.append(E[k][metric] - F[k][metric])
+            cl.append(F[k]["rule_id"])
+        return np.array(d, dtype=float), cl
+
+    dE, clE = _deltas_with_clusters("e20")
+    dT, clT = _deltas_with_clusters("latency")
+    mE, loE, hiE = boot_ci_clustered(dE, clE, args.boot)
+    mE_iid, loE_iid, hiE_iid = boot_ci(dE, args.boot)
     pE = perm_p(dE)
     say(f"P1 dE20 (EPI-FULL) on RECALL: n={len(dE)} mean={mE:.3f} "
-        f"CI=[{loE:.3f},{hiE:.3f}] perm_p={pE}")
+        f"clusterCI=[{loE:.3f},{hiE:.3f}] (iidCI=[{loE_iid:.3f},{hiE_iid:.3f}]) "
+        f"perm_p={pE}")
     results["P1"] = (mE, loE, hiE, pE)
-    mT, loT, hiT = boot_ci(dT, args.boot)
+    mT, loT, hiT = boot_ci_clustered(dT, clT, args.boot)
+    mT_iid, loT_iid, hiT_iid = boot_ci(dT, args.boot)
     pT = perm_p(dT)
     say(f"P2 dLatency (EPI-FULL) on RECALL: n={len(dT)} mean={mT:.3f} "
-        f"CI=[{loT:.3f},{hiT:.3f}] perm_p={pT}")
+        f"clusterCI=[{loT:.3f},{hiT:.3f}] (iidCI=[{loT_iid:.3f},{hiT_iid:.3f}]) "
+        f"perm_p={pT}")
     results["P2"] = (mT, loT, hiT, pT)
+    F_, E_ = arms["FULL"], arms["EPI"]
+    fam_rows = []
+    for fam in range(C.PUZ_FAMILIES):
+        dd = [E_[k]["e20"] - F_[k]["e20"] for k in sorted(set(F_) & set(E_))
+              if F_[k]["type"] == "RECALL" and k[0] == fam]
+        if dd:
+            fam_rows.append((f"fam{fam}", len(dd), round(float(np.mean(dd)), 3)))
+    n_rules = len(set(clE))
+    say(f"P1 per-family dE20: {fam_rows}; RECALL clusters (rule lineages): {n_rules}")
+    results["P1_families"] = fam_rows
 
     # ---- P3: advantage across gaps
     gap_ok, gap_detail = True, []
@@ -310,10 +394,12 @@ def main():
         f"{s['EPI_raw']} -> ratio={ratio if ratio is not None else 'n/a'}")
     results["P5"] = (s, ratio)
 
-    # ---- P6: useful insight rate
-    uir, null95 = useful_insight(arms)
-    say(f"P6 UIR={uir if uir is None else round(uir, 3)} vs permutation null "
-        f"95th pct={null95 if null95 is None else round(null95, 3)}")
+    # ---- P6: useful insight rate (temporally strict, post-review fix)
+    uir, null95 = useful_insight(arms, first_disc)
+    say(f"P6 UIR (discovery_cycle < recurrence_start, DISCOVERY-only): "
+        f"{uir if uir is None else round(uir, 3)} vs matched null "
+        f"95th pct={null95 if null95 is None else round(null95, 3)} "
+        f"(reactivations excluded: {n_react})")
     results["P6"] = (uir, null95)
 
     # ---- P7: noise phases
@@ -369,8 +455,12 @@ def main():
         path = os.path.join(run_dir, "ledger.jsonl")
         rows = [json.loads(l) for l in open(path, encoding="utf-8")]
         for r in rows:
-            if r.get("claim", "").startswith(f"V3-{pid}") and \
-                    r.get("status") in ("REGISTERED", "INVALID"):
+            if r.get("claim", "").startswith(f"V3-{pid}"):
+                if r.get("status") not in ("REGISTERED",):
+                    prior = r.setdefault("revision_history", [])
+                    prior.append({"status": r["status"],
+                                  "evidence": r.get("evidence", ""),
+                                  "ts": r.get("adjudicated_ts", r.get("ts", ""))})
                 r["status"] = status
                 r["evidence"] = str(evidence)[:290]
                 r["adjudicated_ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -410,12 +500,18 @@ def main():
             for a in ("A", "B"):
                 pa, pc = fact[arm][a]["phaseA"], fact[arm][a]["phaseC"]
                 if pa is None or pc is None:
+                    ok8 = False   # registered criterion unevaluable without phase C
                     continue
                 ok = pc <= max(2 * pa, 0.20) if pa > 0 else pc <= 0.20
                 ok8 &= ok
                 ev8.append(f"{arm}-{a}: A={pa:.3f} C={pc:.3f}")
-        p8 = verdict("CONFIRMED" if ok8 else "REFUTED")
-        apply("P08", p8, "; ".join(ev8))
+        if not ev8:
+            p8 = "INCONCLUSIVE" if run_status == "OK" else verdict("INCONCLUSIVE")
+            apply("P08", p8, "phase C missing -- registered 2x-band criterion "
+                             "unevaluable; no regression observed through phase B")
+        else:
+            p8 = verdict("CONFIRMED" if ok8 else "REFUTED")
+            apply("P08", p8, "; ".join(ev8))
 
     with open(os.path.join(run_dir, "analysis_v3.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

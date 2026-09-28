@@ -23,7 +23,8 @@ flymemory's [research/LOOP.md](https://github.com/aujurd22/flymemory/blob/main/r
 
 ## The loop
 
-One iteration per cycle (~0.3 s):
+One iteration per cycle (~0.09 s per arm pass; the V3 run sustains ~4,800
+cycles/hour with both arms and their poets):
 
 ```
 1 EXPERIENCE  the world emits events: a station's channel query,
@@ -93,6 +94,36 @@ The run also served as a **soak test** for FlyMemory itself: 20,977 entries,
 | cold-probe rate | 26.1% | **4.0%** |
 | rules surviving as parseable memory | 0 / 110 | **4/4 families in one RULEBOOK entry, 0 read-back failures** |
 | fact arm B (state_lookup) error | n/a | **0.18 vs arm A 0.28** |
+
+Verdicts `V2-P01..P10`: 7 CONFIRMED / 2 PARTIAL / 1 REFUTED. The seq null
+result *survived* the identifiability repair (marked stream B ≈ unmarked A),
+which upgraded it: the bottleneck is the small poets' aggregate learning, not
+information availability ([full report](findings/night_20260927_1228/FINDINGS.md)).
+
+### Run 3 — `v3_20260928_0252` (10 h, V3: recurrent drift × memory consolidation)
+
+The first controlled mechanism experiment: two memory arms through the
+**identical** precomputed episode schedule (NEW 50% / VARIANT 25% / RECALL
+25%, gaps 2–5 epochs), FULL with a per-family rule registry, EPISODIC with
+tables only, byte-exact padding-write parity. Each arm has its own sandbox
+FlyMemory instance (ports 8769/8770).
+
+| Verdict | Claim | Result |
+|---|---|---|
+| **P01 ✓** | FULL lower error on RECALL (primary) | dE20 = **+0.641**, cluster-bootstrap CI [0.521, 0.776], n=78, perm_p<1e-4, 4/4 families positive |
+| **P02 ✓** | FULL faster recovery (primary) | latency **+0.551** probe, cluster CI [0.426, 0.693] |
+| **P03 ✓** | advantage at every gap 2/3/4/5 | +0.47 … +0.75, all positive |
+| **P04 ✓** (NC1) | advantage absent on VARIANT/NEW | \|dE\| 0.014 / 0.02 vs 0.641 — **pure reuse signature** |
+| **P05 ✓** | stale intrusion within band | SIR ratio **1.42** ≤ 1.5 — memory benefit and memory interference are the same mechanism's two faces |
+| P06 ✗ | useful-insight rate above null | **REFUTED after correction** (external review found no temporal check / REACTIVATION conflation; corrected statistic equals its null; the decisive discovered-vs-undiscovered contrast is untestable — FULL abstracted 100% of rules) |
+| P07 / P08 — | noise-phase / fact-lane controls | INCONCLUSIVE (phase C beyond the reachable 48.3k cycles; design mis-calibration registered) |
+
+Mechanism, resolved from the data: recovery is a **one-observation story** —
+FULL adopts a returning rule from a single live pair (`book_test`, unique
+match required) at probe 2, while EPISODIC needs two pairs to fit at probe 3.
+Zero-observation recovery never happened (0/78). Full analysis, corrections
+trail, and the V4 queue: [findings/v3_20260928_0252](findings/v3_20260928_0252/FINDINGS.md),
+[V3_DESIGN.md](V3_DESIGN.md).
 
 ## Engineering discipline (read this before writing to a memory system in a loop)
 

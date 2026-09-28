@@ -405,7 +405,12 @@ class CycleRunner:
             self.det.on_discovery(c, fam, epoch, a, b, [d["table_id"]])
             self.counts["discoveries"] += 1
             kind = "REACTIVATION" if is_reactivation else "DISCOVERY"
-            rec["discovery"] = True
+            # V3 post-review: DISCOVERY (first abstraction of a rule_id) and
+            # REACTIVATION (book write for a known rule) are different events;
+            # only DISCOVERY can prefix a "future recurrence benefit" claim.
+            rec["discovery"] = not is_reactivation
+            rec["reactivation"] = is_reactivation
+            rec["insight_kind"] = kind
             rec["notes"].append(
                 f"{kind} fam={fam} ep={epoch} rid={rid} a={a} b={b}")
             self.log(f"[c{c}] INSIGHT {kind} fam={fam}({word}) ep={epoch} rid={rid} "
