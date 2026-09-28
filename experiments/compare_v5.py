@@ -181,17 +181,17 @@ def main():
     rows = [json.loads(l) for l in open(lpath, encoding="utf-8")]
     if not any(r.get("claim", "").startswith("V5-P") for r in rows):
         claims = {
-            "V5-P01": "replication at eps=0: F-M advantage positive on discovered "
-                      "recurrences in run A",
-            "V5-P02": "condition law: dE20(M-F) larger at eps=0.25 than at eps=0 "
-                      "(noise shrinks the compression advantage); between-run CI excludes 0",
-            "V5-P03": "discovery rate drops under noise (C1 extraction degraded)",
-            "V5-P04": "FULL book_test success collapses under noise (mechanism)",
-            "V5-P05": "EPISODIC degrades slowest in absolute error under noise",
+            "V5-P01": "V5-P01: replication at eps=0 — F-M advantage positive on "
+                      "discovered recurrences in run A",
+            "V5-P02": "V5-P02: condition law — dE20(M-F) larger at eps=0.25 than at "
+                      "eps=0 (between-run contrast CI excludes 0)",
+            "V5-P03": "V5-P03: discovery rate drops under noise (C1 extraction degraded)",
+            "V5-P04": "V5-P04: FULL book_test success drops under noise (mechanism)",
+            "V5-P05": "V5-P05: EPISODIC degrades slowest in absolute error under noise",
         }
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         for pid, claim in claims.items():
-            rows.append({"id": f"FL-V5-{pid[-4:]}", "kind": "run", "claim": claim,
+            rows.append({"id": f"FL-{pid}", "kind": "run", "claim": claim,
                          "status": "REGISTERED", "evidence": "", "ts": ts})
         with open(lpath, "w", encoding="utf-8") as f:
             for r in rows:
