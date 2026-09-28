@@ -23,6 +23,11 @@ P_RULE = re.compile(r"FLRULE f(\d) (\S+) c=(\d+) e(\d+) a=(\d+) b=(\d+)")
 P_BOOK3 = re.compile(r"([红蓝金银])家r(\d+)=(\d+)x(\d+)e(\d+)")
 FAM_OF_TAG = {"红": 0, "蓝": 1, "金": 2, "银": 3}
 P_BOOK = re.compile(r"f(\d)=(\d+)x\+(\d+)m13e(\d+)")
+# MATCHED arm's episodic archive entry: "钟表铺的原始记录… c=531 :: 红家3:7 红家11:2 e8"
+# (state_lookup appends " (since ...)" after the payload, so the epoch match
+# is the LAST e(\d+) in the payload, not an end-anchored one)
+P_EPIREG_EP = re.compile(r"e(\d+)")
+P_EPIREG_PAIR = re.compile(r"([红蓝金银])?(\d{1,2}):(\d{1,2})")
 P_PAIR = re.compile(r"(\d{1,2}):(\d{1,2})")
 
 STATE_KEY_FACT = "flyloop/st-{st}"
@@ -57,10 +62,29 @@ def parse_book_v3(block: str, fam: int):
 
 def book_candidates(rules, cap):
     """The family's rules sorted by recency (last-active epoch), newest first,
-    capped. Includes the current-epoch rule if present -- predict_puzzle_v3
+    capped. Includes the current-epoch rule if present -- predict_puzzle_v4
     splits it into the direct 'rule' path and tests the rest as recurrence
     candidates."""
     return sorted(rules, key=lambda r: -r[3])[:cap]
+
+
+def parse_epireg(block: str):
+    """MATCHED archive state_lookup response -> (pairs, epoch) or None.
+    The payload is the tagged pair list after '::', ending in e{epoch};
+    take the LAST e(\\d+) (the response tail adds '(since ...)' text)."""
+    if not block or "::" not in block:
+        return None, None
+    payload = block.split("::", 1)[1]
+    eps = P_EPIREG_EP.findall(payload)
+    if not eps:
+        return None, None
+    ep = int(eps[-1])
+    pairs = []
+    for _tag, x, y in P_EPIREG_PAIR.findall(payload[:payload.rfind("e" + eps[-1])]):
+        x, y = int(x), int(y)
+        if 0 <= x < C.PUZ_P and 0 <= y < C.PUZ_P:
+            pairs.append((x, y))
+    return pairs, ep
 
 
 def book_test(cands, pairs, p: int):
@@ -69,7 +93,7 @@ def book_test(cands, pairs, p: int):
     Returns (rule, rank, n_matches). A rule matches when it reproduces every
     observed pair. With one observed pair a wrong candidate matches with
     probability 1/p, so at candidate counts > p the unique-match requirement
-    is what keeps single-probe adoption honest; ambiguity falls through to
+    is what keeps single-pair adoption honest; ambiguity falls through to
     fitting instead of guessing among matches."""
     if not pairs:
         return None, 0, 0
@@ -80,6 +104,41 @@ def book_test(cands, pairs, p: int):
     if len(matches) == 1:
         return matches[0][0], matches[0][1], 1
     return None, 0, len(matches)
+
+
+def epi_test(cands, obs):
+    """MATCHED arm's matcher: the SAME unique-match decision rule as
+    book_test, but candidates are RAW episodic pair tables instead of
+    compressed rules. A candidate matches iff it maps EVERY live x to the
+    live y (an x absent from the candidate's table cannot be verified ->
+    no match — raw pairs do not generalize, that IS the representation
+    difference under test). Returns (candidate, rank, n_matches) where
+    candidate = (pairs, ep)."""
+    if not obs:
+        return None, 0, 0
+    matches = []
+    for rank, (pairs, ep) in enumerate(cands, start=1):
+        table = dict(pairs)
+        if all(x in table and table[x] == y for x, y in obs):
+            matches.append(((pairs, ep), rank))
+    if len(matches) == 1:
+        return matches[0][0], matches[0][1], 1
+    return None, 0, len(matches)
+
+
+def fit_from(pairs, p: int):
+    """Least-squares-free exact linear fit from >= 2 distinct x values.
+    Returns (a, b) or None."""
+    uniq = {}
+    for x, y in pairs:
+        uniq[x] = y
+    pts = list(uniq.items())
+    if len(pts) < 2:
+        return None
+    (x1, y1), (x2, y2) = pts[0], next(pr for pr in pts[1:] if pr[0] != pts[0][0])
+    a = ((y1 - y2) * _inv_mod(x1 - x2, p)) % p
+    b = (y1 - a * x1) % p
+    return a, b
 
 
 def parse_pairs(blob: str):
@@ -158,48 +217,54 @@ def predict_puzzle(entries, fam: int, epoch: int, xp: int):
     return None, "cold", [], 0, None
 
 
-def predict_puzzle_v3(entries, fam: int, epoch: int, xp: int, cands=None, obs=None):
-    """V3 hierarchy (FULL arm passes cands; EPISODIC passes cands=None).
+def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
+                      cands=None, epi_cands=None):
+    """V4 hierarchy over PRE-FOLDED live observations (the current probe's
+    revealed pair is already in `obs` — applies to ALL arms symmetrically).
 
-    obs = this episode's live observations (distinct pairs, runner RAM) —
-    available to BOTH arms identically. `entries` = recalled memory blocks
-    (tables) used only as the stale fallback.
-
-    1. book rule already re-activated with the CURRENT epoch
-    2. book candidates tested against live observations: a UNIQUE match is
-       adopted immediately (the recurrence shortcut — one observation instead
-       of two); ambiguity falls through
-    3. live fit from >= 2 distinct observed pairs
-    4. stale fit from the freshest recalled table (a previous epoch's)
+    1. (F) book rule already active at this epoch -> "rule"
+    2. (F) book candidates tested against obs: unique match -> "book_test"
+       (M) episodic candidates: unique raw-table match -> "epi_test", then
+           fit from the matched table's pairs + obs (raw pairs need >= 2
+           distinct x to answer a new xp)
+    3. live fit from >= 2 distinct obs (all arms)
+    4. (E/M) stale fit from the freshest recalled table
     5. guess / cold
 
-    Returns (y, method, evidence_ids, n_ver, (a, b), aux).
+    Returns (y, method, n_ver, (a, b), aux).
     """
     p = C.PUZ_P
     obs = list(obs or [])
-    cur_rule = None
     if cands:
         for rid, a, b, ep in cands:
             if ep == epoch:
-                cur_rule = (rid, a, b, ep)
-                break
-    if cur_rule is not None:
-        rid, a, b, _ = cur_rule
-        return ((a * xp + b) % p, "rule", [], 1, (a, b),
-                {"rule_id": rid, "book_rank": 1, "n_book_matches": 1})
-    test_cands = [r for r in (cands or []) if r[3] != epoch][:C.BOOK_TEST_K]
-    if test_cands and obs:
-        rule, rank, n_m = book_test(test_cands, obs, p)
-        if rule is not None:
-            rid, a, b, _ = rule
-            return ((a * xp + b) % p, "book_test", [], 1, (a, b),
-                    {"rule_id": rid, "book_rank": rank, "n_book_matches": n_m})
+                return ((a * xp + b) % p, "rule", 1, (a, b),
+                        {"rule_id": rid, "book_rank": 1, "n_book_matches": 1})
+        test_cands = [r for r in cands if r[3] != epoch][:C.BOOK_TEST_K]
+        if obs:
+            rule, rank, n_m = book_test(test_cands, obs, p)
+            if rule is not None:
+                rid, a, b, _ = rule
+                return ((a * xp + b) % p, "book_test", 1, (a, b),
+                        {"rule_id": rid, "book_rank": rank,
+                         "n_book_matches": n_m})
+    if epi_cands and obs:
+        cand, rank, n_m = epi_test(
+            [(pairs, ep) for pairs, ep in epi_cands if ep != epoch][:C.EPIREG_CAP],
+            obs)
+        if cand is not None:
+            cpairs, cep = cand
+            ab = fit_from(list(cpairs) + obs, p)
+            if ab is not None:
+                a, b = ab
+                return ((a * xp + b) % p, "epi_test", 1, (a, b),
+                        {"epi_rank": rank, "n_epi_matches": n_m})
     if len(obs) >= 2:
-        (x1, y1), (x2, y2) = obs[0], next(pr for pr in obs[1:] if pr[0] != obs[0][0])
-        a = ((y1 - y2) * _inv_mod(x1 - x2, p)) % p
-        b = (y1 - a * x1) % p
-        n_ver = sum(1 for x, y in obs[2:] if (a * x + b) % p == y)
-        return ((a * xp + b) % p, "fit", [], n_ver, (a, b), {})
+        ab = fit_from(obs, p)
+        if ab is not None:
+            a, b = ab
+            n_ver = sum(1 for x, y in obs[2:] if (a * x + b) % p == y)
+            return ((a * xp + b) % p, "fit", n_ver, (a, b), {})
     # stale fallback from memory (previous epoch's table may still be active)
     tables = []
     for mid, text in entries:
@@ -208,19 +273,14 @@ def predict_puzzle_v3(entries, fam: int, epoch: int, xp: int, cands=None, obs=No
             tables.append((parse_pairs(m.group(1)), int(m.group(5)),
                            int(m.group(4)), mid))
     if obs:
-        return obs[0][1], "guess", [], 0, None, {}
+        return obs[0][1], "guess", 0, None, {}
     if tables:
         pairs, tbl_ep, cyc, mid = max(tables, key=lambda t: t[2])
-        uniq = {}
-        for x, y in pairs:
-            uniq[x] = y
-        uniq = list(uniq.items())
-        if len(uniq) >= 2:
-            (x1, y1), (x2, y2) = uniq[0], next(pr for pr in uniq[1:] if pr[0] != uniq[0][0])
-            a = ((y1 - y2) * _inv_mod(x1 - x2, p)) % p
-            b = (y1 - a * x1) % p
-            n_ver = sum(1 for x, y in uniq[2:] if (a * x + b) % p == y)
+        ab = fit_from(pairs, p)
+        if ab is not None:
+            a, b = ab
+            n_ver = sum(1 for x, y in pairs if (a * x + b) % p == y)
             method = "fit" if tbl_ep == epoch else "fit_stale"
-            return ((a * xp + b) % p, method, [mid], n_ver, (a, b), {})
-        return uniq[0][1], "guess", [mid], 0, None, {}
-    return None, "cold", [], 0, None, {}
+            return ((a * xp + b) % p, method, n_ver, (a, b), {})
+        return pairs[0][1], "guess", 0, None, {}
+    return None, "cold", 0, None, {}

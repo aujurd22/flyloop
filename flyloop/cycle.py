@@ -42,29 +42,31 @@ BOOK_TAG = "RULEBOOK"
 
 
 class PadSync:
-    """FULL-arm book writes -> EPI-arm padding writes, 1:1 by count and bytes."""
+    """FULL book writes + MATCHED archive writes -> EPISODIC padding writes,
+    1:1 by event count and byte-exact in total (three-way write parity)."""
 
     def __init__(self):
         self.queue = deque()
-        self.charged = 0
+        self.charged = {"FULL": 0, "MATCHED": 0}
         self.drained = 0
 
-    def charge(self, nbytes: int):
+    def charge(self, arm: str, nbytes: int):
         self.queue.append(nbytes)
-        self.charged += nbytes
+        self.charged[arm] = self.charged.get(arm, 0) + nbytes
 
     def take(self):
-        """Pop the next owed padding size (one book write -> one pad write)."""
+        """Pop the next owed padding size (one book/archive write -> one pad
+        write; byte parity is checked on totals, not per event)."""
         if self.queue:
-            n = self.queue.popleft()
-            self.drained += n
-            return n
+            return self.queue.popleft()
         return None
 
     def parity(self) -> dict:
         pending = sum(self.queue)
-        return {"charged": self.charged, "drained": self.drained,
-                "pending": pending, "pending_events": len(self.queue)}
+        return {"charged_FULL": self.charged.get("FULL", 0),
+                "charged_MATCHED": self.charged.get("MATCHED", 0),
+                "drained": self.drained, "pending": pending,
+                "pending_events": len(self.queue)}
 
 
 def table_text(fam, ep, c, pairs_str):
@@ -90,6 +92,19 @@ def book_state_key(fam):
     return C.BOOK_STATE_KEY.format(fam=fam)
 
 
+def epireg_text(fam, ep, c, pairs_str):
+    """MATCHED arm's episodic archive entry: the episode's raw pair table,
+    one entry per episode (unique state_key -> no in-place overwrites).
+    Distinct CJK head + a family tag on every pair token keeps cross-family
+    similarity below the merge line (calibrated; see config.EPIREG_HEADS)."""
+    tagged = " ".join(f"{FAM_TAGS[fam]}{t}" for t in pairs_str.split())
+    return f"{C.EPIREG_HEADS[fam]} c={c} :: {tagged} e{ep}"
+
+
+def epireg_state_key(fam, ep):
+    return C.EPIREG_STATE_KEY.format(fam=fam, ep=ep)
+
+
 def pad_text(nbytes: int, seq: int) -> str:
     head = f"{C.PAD_HEAD} p{seq:06d} "
     return (head + "z" * nbytes)[:max(nbytes, 1)]
@@ -111,26 +126,31 @@ class CycleRunner:
         self.det = det
         self.ledger = ledger
         self.log = log
-        self.arm = arm                 # "FULL" | "EPI"
-        self.pad_sync = pad_sync       # shared with the worker (FULL charges, EPI drains)
+        self.arm = arm                 # "FULL" | "MATCHED" | "EPISODIC"
+        self.pad_sync = pad_sync       # shared; F/M charge, E drains
         self.pad_seq = pad_seq
         self.disc = {}
         self.book = {}   # {fam: {rid: {"a","b","ep"}}}  (mirror of the RULEBOOK entry)
+        self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.counts = {"writes": 0, "recalls": 0, "noise": 0, "discoveries": 0,
                        "fact_writes": 0, "pair_writes": 0, "book_writes": 0,
-                       "book_bytes": 0, "pad_writes": 0, "pad_bytes": 0,
+                       "book_bytes": 0, "epireg_writes": 0, "epireg_bytes": 0,
+                       "pad_writes": 0, "pad_bytes": 0,
                        "rejected": 0, "cold": 0,
                        "fact_readback_fail": 0, "rulebook_readback_fail": 0,
                        "table_readback_fail": 0,
                        "factA_n": 0, "factB_n": 0, "factA_hit": 0, "factB_hit": 0,
-                       "puz_probes": 0, "book_test_uses": 0,
+                       "puz_probes": 0, "book_test_uses": 0, "epi_test_uses": 0,
                        "stale_intrusions": 0, "episodes": {"NEW": 0, "VARIANT": 0,
                                                            "RECALL": 0}}
 
     # ------------------------------------------------------------------
-    async def _remember(self, text, tags, compartment="", state_key="", state_value=""):
+    async def _remember(self, text, tags, compartment="", state_key="",
+                        state_value="", force_new=False):
         resp, mode = await self.mem.remember(text, tags=tags, compartment=compartment,
-                                             state_key=state_key, state_value=state_value)
+                                             state_key=state_key,
+                                             state_value=state_value,
+                                             force_new=force_new)
         self.counts["writes"] += 1
         if "REJECTED" in resp:
             self.counts["rejected"] += 1
@@ -198,12 +218,12 @@ class CycleRunner:
         else:
             await self._puzzle_leg(c, rec)
 
-        # ------------- EPI arm: mirror the FULL arm's book writes ------------
-        if self.arm == "EPI" and self.pad_sync is not None:
+        # ------------- EPISODIC arm: mirror the structured writes -----------
+        if self.arm == "EPISODIC" and self.pad_sync is not None:
             await self._drain_padding(rec)
 
-        # ------------- distractor pressure (three phases, fixed in config) ----
-        if c % C.noise_every(c) == 0:
+        # ------------- distractor pressure (quota-gated phases, v4) --------
+        if c % world.noise_every(c) == 0:
             await self._remember(world.distractor_text(c), tags="flyloop,noise",
                                  compartment=C.COMPARTMENT_NOISE)
             self.counts["noise"] += 1
@@ -260,7 +280,7 @@ class CycleRunner:
                     rec["notes"].append("fact_readback_fail")
 
     async def _drain_padding(self, rec):
-        """EPI arm only: mirror the FULL arm's book writes, byte for byte."""
+        """EPISODIC arm only: mirror the FULL/MATCHED structured writes."""
         n = self.pad_sync.take() if self.pad_sync else None
         if n is None:
             return
@@ -271,6 +291,7 @@ class CycleRunner:
                              state_key=C.PAD_STATE_KEY, state_value=f"p{self.pad_seq}")
         self.counts["pad_writes"] += 1
         self.counts["pad_bytes"] += n
+        self.pad_sync.drained += n
         rec["notes"].append(f"pad:{n}")
 
     async def _puzzle_leg(self, c, rec):
@@ -283,11 +304,18 @@ class CycleRunner:
         d = self.disc.setdefault((fam, epoch), {
             "consec": 0, "done": False, "table": {}, "table_id": None,
             "unseen_since_write": 0, "probes": 0, "ep_counted": False,
-            "adopted": None})
+            "adopted": None, "archived": False})
         probe_idx = d["probes"] + 1
         if not d["ep_counted"]:
             d["ep_counted"] = True
             self.counts["episodes"][wep["type"]] += 1
+
+        # V4 interface fix (applied to ALL arms identically): the current
+        # probe's revealed pair is folded into the live observations BEFORE
+        # prediction — in V3 it landed after, blinding probe 1 by artifact.
+        d["table"][str(x1)] = y1
+        d["probes"] += 1
+        d["unseen_since_write"] += 1
         # table dict keys are str (JSON round-trip through state.json); the
         # reasoner needs int pairs
         obs = [(int(k), v) for k, v in d["table"].items()]  # live observations
@@ -298,33 +326,55 @@ class CycleRunner:
         self.counts["recalls"] += 1
         entries = parse_recall(block_t)
         cands = None
+        epi_cands = None
         if self.arm == "FULL":
             block_b, _ = await self.mem.state_lookup(book_state_key(fam))
             self.counts["recalls"] += 1
             registry = reasoner.parse_book_v3(block_b, fam)
             cands = reasoner.book_candidates(registry, C.BOOK_CAP)
-        y, method, eids, n_ver, ab, aux = reasoner.predict_puzzle_v3(
-            entries, fam, epoch, xp, cands=cands, obs=obs)
+        elif self.arm == "MATCHED":
+            # exact state_lookup over the runner's own archive index (RAM
+            # mirror of written keys) — similarity-based recall would rank
+            # same-family archive entries arbitrarily (heads identical)
+            epi = []
+            for ep_old in self.epi_index.get(fam, [])[-C.EPIREG_CAP:]:
+                if ep_old == epoch:
+                    continue
+                try:
+                    blk, _ = await self.mem.state_lookup(
+                        epireg_state_key(fam, ep_old))
+                except Exception:
+                    continue
+                pairs, _ep = reasoner.parse_epireg(blk or "")
+                if pairs:
+                    epi.append((pairs, ep_old))
+            epi.sort(key=lambda t: -t[1])
+            epi_cands = epi
+        y, method, n_ver, ab, aux = reasoner.predict_puzzle_v4(
+            entries, fam, epoch, xp, obs, cands=cands, epi_cands=epi_cands)
 
         stale_present = bool(cands) if self.arm == "FULL" else \
             any(int(m.group(5)) != epoch for m in
                 [reasoner.P_PAIRS.search(t) for _, t in entries]
                 if m and int(m.group(2)) == fam)
         err = 1 if (y is None or y != truth) else 0
-        stale_intrusion = int(err == 1 and (
-            method == "book_test" or method == "fit_stale" or method == "rule"))
+        stale_intrusion = int(err == 1 and method in
+                              ("book_test", "epi_test", "fit_stale", "rule"))
         rec.update(lane="puzzle",
                    episode_type=wep["type"], family=fam, epoch=epoch,
                    rule_id=wep["rule_id"], rule_age=(wep["gap"] if wep["type"] == "RECALL" else 0),
                    probe_idx=probe_idx,
                    prediction=y, truth=truth, error=err,
-                   method=method, retrieval_rank=aux.get("book_rank"),
+                   method=method, retrieval_rank=aux.get("book_rank", aux.get("epi_rank")),
                    stale_candidate_present=int(bool(stale_present)),
                    stale_intrusion=stale_intrusion,
-                   discovery=False, useful_insight=None)
+                   discovery=False, reactivation=False, insight_kind=None,
+                   useful_insight=None)
         self.counts["puz_probes"] += 1
         if method == "book_test":
             self.counts["book_test_uses"] += 1
+        if method == "epi_test":
+            self.counts["epi_test_uses"] += 1
         if stale_intrusion:
             self.counts["stale_intrusions"] += 1
             rec["notes"].append(f"stale:{aux.get('rule_id') or method}")
@@ -333,10 +383,7 @@ class CycleRunner:
         if err:
             rec["notes"].append(f"puz:{y}!={truth}({method})")
 
-        # table fold-in: keep the freshest pairs; write every Nth probe or on error
-        d["probes"] += 1
-        d["table"][str(x1)] = y1
-        d["unseen_since_write"] += 1
+        # table fold-in write (all arms, identical cadence)
         if err or d["unseen_since_write"] >= C.TABLE_WRITE_EVERY:
             d["unseen_since_write"] = 0
             d["table"] = dict(list(d["table"].items())[-5:])
@@ -360,6 +407,33 @@ class CycleRunner:
                 if not ok:
                     self.counts["table_readback_fail"] += 1
                     rec["notes"].append("table_readback_fail")
+
+        # MATCHED arm: archive the episode's raw pairs once, at its last
+        # probe. force_new is LOAD-BEARING: same-family archive entries share
+        # the head and measure >0.92 similar, so without it the merge zone
+        # would rewrite older episodes' entries and the archive would
+        # degenerate to one entry per family (the >120-char lesson's sibling).
+        # Unique per-episode state_keys + force_new keep every episode's row.
+        if (self.arm == "MATCHED" and not d["archived"]
+                and d["probes"] >= wep["n_probes"]):
+            pairs_s = " ".join(f"{x}:{v}" for x, v in
+                               list(d["table"].items())[-5:])
+            text = epireg_text(fam, epoch, c, pairs_s)
+            resp, _ = await self._remember(
+                text, tags="flyloop,epireg", compartment=C.COMPARTMENT_EPIREG,
+                state_key=epireg_state_key(fam, epoch), state_value=f"e{epoch}",
+                force_new=True)
+            # flag AFTER the write succeeds: a failed write must not silently
+            # skip the archive on the worker's cycle retry (V4 smoke lesson)
+            d["archived"] = True
+            self.counts["epireg_writes"] += 1
+            nbytes = len(text.encode("utf-8"))
+            self.counts["epireg_bytes"] += nbytes
+            self.epi_index.setdefault(fam, []).append(epoch)
+            if len(self.epi_index[fam]) > C.EPIREG_CAP:
+                self.epi_index[fam] = self.epi_index[fam][-C.EPIREG_CAP:]
+            if self.pad_sync is not None:
+                self.pad_sync.charge("MATCHED", nbytes)
 
         # discovery / re-activation -> RULEBOOK update (FULL arm only)
         if method == "fit" and err == 0 and n_ver >= 1:
@@ -391,7 +465,7 @@ class CycleRunner:
             nbytes = len(text.encode("utf-8"))
             self.counts["book_bytes"] += nbytes
             if self.pad_sync is not None:
-                self.pad_sync.charge(nbytes)
+                self.pad_sync.charge("FULL", nbytes)
             # read-back: this family's rules must be visible in its book entry
             try:
                 rb, _ = await self.mem.state_lookup(book_state_key(fam))
@@ -422,10 +496,12 @@ class CycleRunner:
         return {"disc": {f"{k[0]}:{k[1]}": v for k, v in self.disc.items()},
                 "counts": self.counts,
                 "book": {str(k): v for k, v in self.book.items()},
+                "epi_index": {str(k): v for k, v in self.epi_index.items()},
                 "arm": self.arm, "pad_seq": self.pad_seq}
 
     def load_dict(self, d):
         self.disc = {tuple(map(int, k.split(":"))): v for k, v in d.get("disc", {}).items()}
         self.counts = d.get("counts", self.counts)
         self.book = {int(k): v for k, v in (d.get("book") or {}).items()}
+        self.epi_index = {int(k): v for k, v in (d.get("epi_index") or {}).items()}
         self.pad_seq = d.get("pad_seq", 0)

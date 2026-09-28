@@ -144,9 +144,11 @@ class MemFacade:
         except Exception:
             pass
 
-    async def remember(self, text, tags="", compartment="", state_key="", state_value=""):
+    async def remember(self, text, tags="", compartment="", state_key="",
+                       state_value="", force_new=False):
         args = {"text": text, "tags": tags, "compartment": compartment,
-                "state_key": state_key, "state_value": state_value}
+                "state_key": state_key, "state_value": state_value,
+                "force_new": force_new}
         if self.mode == "http":
             try:
                 return await self.client.call("flymemory_remember", args), "http"

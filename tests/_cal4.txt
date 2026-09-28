@@ -1,0 +1,28 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/199 [00:00<?, ?it/s]Loading weights: 100%|██████████| 199/199 [00:00<00:00, 12819.13it/s]
+ok   table cross-family < 0.75: 0.741 
+ok   table same-fam update > 0.75: 0.993 
+ok   book cross-family < 0.75: 0.635 
+ok   book update > 0.75: 0.983 
+ok   book vs tables < 0.75: 0.616 
+ok   book vs facts < 0.75: 0.497 
+ok   book vs noise < 0.75: 0.334 
+ok   pad update > 0.75 (in-place rewrite): 0.993 
+ok   pad vs tables < 0.75: 0.296 
+ok   pad vs facts < 0.75: 0.418 
+ok   pad vs book < 0.75: 0.348 
+ok   epireg cross-family < 0.75: 0.746 
+ok   epireg vs tables < 0.75: 0.745 
+info epireg vs book similarity: 0.830 (inert: exact-key reads only)
+ok   epireg len<120 (split_chunks guard): 64.000 
+ok   table vs facts < 0.75: 0.450 
+ok   fact cross-station < 0.75: 0.727 
+ok   fact same-station update > 0.75: 0.986 
+
+-- retrieval (own entity must rank first) --
+ok   fam0 query -> best=0 0.712 (2nd 0.413)
+ok   fam1 query -> best=1 0.734 (2nd 0.301)
+ok   fam2 query -> best=2 0.754 (2nd 0.562)
+ok   fam3 query -> best=3 0.746 (2nd 0.493)
+
+ALL CALIBRATION CONSTRAINTS PASS (tables 69 chars max, book 60, facts 64)

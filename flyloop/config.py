@@ -43,14 +43,16 @@ ROOT = os.environ.get("FLYLOOP_ROOT", os.path.dirname(_HERE))
 FLYPOET_REPO = os.environ.get(
     "FLYLOOP_FLYPOET", os.path.join(os.path.dirname(ROOT), "flypoet"))
 
-# sandbox FlyMemory instances (v3: one per arm — FULL and EPI each get their own
-# process AND pickle, because the merge zone ignores compartments, so
-# same-persona texts from the two arms would collide in one store. 8765=ZCode
-# prod, 8766=WorkBuddy, 8767=v2 legacy sandbox left running; v3 uses 8769/8770).
+# sandbox FlyMemory instances (v4: one per arm — FULL 8769 / MATCHED 8770 /
+# EPISODIC 8771; separate processes AND pickles, because the merge zone
+# ignores compartments, so same-persona texts from different arms would
+# collide in one store. 8765=ZCode prod, 8766=WorkBuddy, 8767=v2 legacy).
 MEM_HOST = "127.0.0.1"
 MEM_PORT = int(os.environ.get("FLYLOOP_PORT", "8769"))
 MEM_URL = f"http://{MEM_HOST}:{MEM_PORT}/mcp"
-MEM_PORT_EPI = int(os.environ.get("FLYLOOP_PORT_EPI", "8770"))
+MEM_PORT_MATCHED = int(os.environ.get("FLYLOOP_PORT_MATCHED", "8770"))
+MEM_URL_MATCHED = f"http://{MEM_HOST}:{MEM_PORT_MATCHED}/mcp"
+MEM_PORT_EPI = int(os.environ.get("FLYLOOP_PORT_EPI", "8771"))
 MEM_URL_EPI = f"http://{MEM_HOST}:{MEM_PORT_EPI}/mcp"
 SANDBOX_MEM_DIR = os.path.join(ROOT, "sandbox_mem", "flymemory")
 
@@ -106,9 +108,11 @@ SEQ_SHOWER = False
 SEQ_STREAM_B = True          # dual stream: B gets a regime token (identifiability)
 
 # puzzle lane: 4 families of y=(a*x+b) mod 13; episodes follow a precomputed
-# recurrent schedule (V3 §4): NEW 50% / VARIANT 25% / RECALL 25%, recurrence
-# gaps uniform on {2,3,4,5} epochs. The schedule is a pure function of SEED,
-# so both memory arms live through the identical episode sequence.
+# recurrent schedule. V4: episodes have VARIABLE lengths in probes — short
+# episodes end before the abstraction loop (fit -> consec=3 -> book write)
+# completes, creating the discovery-failure variation the discovered-vs-
+# undiscovered contrast needs (V3's FULL abstracted 100% of rules, so the
+# contrast had zero variation). Type mix and gaps unchanged from V3.
 PUZ_FAMILIES = 4
 PUZ_P = 13
 PUZ_PERIOD0 = int(os.environ.get("FLYLOOP_PUZ_PERIOD0", "500"))
@@ -117,12 +121,29 @@ PUZ_DISC_CONSEC = 3
 PUZ_RECALL_TOPK = 8          # raise to catch both table and rule entries
 EPISODE_MIX = {"NEW": 0.50, "VARIANT": 0.25, "RECALL": 0.25}
 RECALL_GAPS = [2, 3, 4, 5]   # epochs since the returning rule was last active
-MAX_EPISODES = 240           # per family; NEW ~120 << 156 distinct rules exist
+MAX_EPISODES = 240           # (v3 legacy; v4 uses MAX_EPISODES_V4)
 BOOK_TEST_K = 5              # recency window of book candidates tested per probe
+# V4 length mix: probes per episode. A family is probed every 8 cycles
+# (cycle c with c%2==0 and (c//2)%4==f), so n_probes -> cycle length is 8n.
+# Short episodes (4-6 probes) usually end before consec reaches 3.
+PUZ_PROBE_CADENCE = 8
+EPISODE_PROBE_LENS = [4, 6, 10, 20, 40]
+EPISODE_PROBE_WEIGHTS = [0.15, 0.15, 0.25, 0.25, 0.20]
+# horizon/mix arithmetic (do not eyeball): mean length 17 probes = 136 cycles
+# -> ~310 episodes/family in 42k cycles -> NEW ~155/family, just inside the
+# 156 distinct (a,b) pairs per family; the 200-draw NEW fallback covers the
+# tail. A 3-arm run reaches ~30-40k cycles in 10h, so the horizon binds only
+# in pathological fast runs (past it, a family's rule freezes; deadline-first).
+MAX_EPISODES_V4 = 300        # per family within the schedule horizon
+SCHEDULE_HORIZON = 42000     # cycles the precomputed schedule covers
+# quota-gated noise phases: advance on cumulative NEW-episode starts (pooled
+# over families), never on cycle thresholds (V3 P07/P08 lesson)
+NOISE_PHASE_GATES = [("A", 0), ("B", 50), ("C", 110)]   # by NEW count
+NOISE_EVERY_BY_PHASE = {"A": 20, "B": 10, "C": 5}
 
-# distractor pressure, three phases written into the design BEFORE launch
-# (V3 §7): clean -> 2x -> 4x. noise_every(cycle) is the only reader.
-NOISE_PHASES = [(30000, 20), (60000, 10), (None, 5)]
+# distractor pressure, quota-gated (V4): phases advance on cumulative
+# NEW-episode starts (NOISE_PHASE_GATES), never on cycle thresholds.
+# world.puz_phase(cycle) is the only reader.
 FACT_REFRESH_EVERY = 600
 
 # word anchors & personas (calibrated with MiniLM; see DESIGN_V2 §2).
@@ -184,18 +205,25 @@ PAD_HEAD = "PADLOG"
 # loses no recurrence coverage.
 BOOK_STATE_KEY = "flyloop/book/f{fam}"
 BOOK_CAP = 5                # recent rules kept per family (gaps are 2-5)
+# v4 MATCHED arm: episodic pair-table archive, one entry per episode (unique
+# state_key per episode -> no in-place overwrites -> history survives), same
+# cap depth as the book. The archive entry text reuses the table payload
+# format (pairs first) with its own head, in its own compartment.
+COMPARTMENT_EPIREG = "flyloop-epireg"
+EPIREG_STATE_KEY = "flyloop/epi/{fam}/e{ep}"
+# distinct CJK heads + a family tag on every pair token (measured, real
+# MiniLM: cross-family 0.731 < 0.75; the shared-template first draft measured
+# 0.962 — same failure mode as the v1 book). Matcher reads via state_lookup
+# (exact key), so this is hygiene, not a load-bearing path.
+EPIREG_HEADS = ["钟表铺的原始记录，齿轮转一遍记一笔",
+                "账房先生的流水簿，进出笔笔即时录",
+                "观星台的速记板，星位随见随画",
+                "裁缝铺的纸样袋，剪一刀存一页"]
+EPIREG_CAP = 5              # archive depth used by the matcher
 
 # --- insight/ledger ----------------------------------------------------------------
 ROLL_WINDOW = 100
 DRIFT_PRE_WINDOW = 60
 DRIFT_POST_WINDOW = 60
 SIGNATURE_RATIO_MIN = 1.5
-REC_WINDOW = 20              # probes per episode scored for recovery (V3 P1)
-
-
-def noise_every(cycle: int) -> int:
-    """Three-phase distractor pressure, fixed before launch (V3 §7)."""
-    for cap, every in NOISE_PHASES:
-        if cap is None or cycle < cap:
-            return every
-    return NOISE_PHASES[-1][1]
+REC_WINDOW = 20              # probes per episode scored for recovery

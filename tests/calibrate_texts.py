@@ -17,7 +17,7 @@ from sentence_transformers import SentenceTransformer  # noqa: E402
 
 from flyloop import config as C  # noqa: E402
 from flyloop.cycle import (table_text, book_text_v3, pad_text, fact_text,  # noqa: E402
-                           fam_query)
+                           fam_query, epireg_text)
 from flyloop.world import distractor_text  # noqa: E402
 
 m = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
@@ -48,6 +48,8 @@ books_upd = [book_text_v3(f, {f: {f"f{f}r2": {"a": 3, "b": 7, "ep": 66},
                                   f"f{f}r3": {"a": 4, "b": 11, "ep": 66}}}, 53100)
              for f in range(4)]
 pads = [pad_text(80, 1), pad_text(96, 2)]
+epiregs = [epireg_text(f, 10 + f, 53000, "6:10 12:7 5:4 7:3 9:2") for f in range(4)]
+epiregs2 = [epireg_text(f, 11 + f, 53100, "1:2 8:9 3:3") for f in range(4)]
 facts = [fact_text(i, C.FACT_WORDS[i], "C", 53000, C.FACT_DESC[i]) for i in range(24)]
 noises = [distractor_text(1), distractor_text(99)]
 
@@ -76,6 +78,25 @@ check("pad vs facts < 0.75", mx([(p, f) for p in pads for f in facts]) < 0.75,
       mx([(p, f) for p in pads for f in facts]))
 check("pad vs book < 0.75", mx([(p, b) for p in pads for b in books]) < 0.75,
       mx([(p, b) for p in pads for b in books]))
+# v4 MATCHED archive: cross-family < 0.75 (hygiene); vs tables < 0.75 (the
+# two live in different compartments and the matcher reads via state_lookup,
+# but a cross-contamination guard costs nothing)
+check("epireg cross-family < 0.75",
+      mx([(epiregs[i], epiregs[j]) for i in range(4) for j in range(i + 1, 4)]) < 0.75,
+      mx([(epiregs[i], epiregs[j]) for i in range(4) for j in range(i + 1, 4)]))
+check("epireg vs tables < 0.75",
+      mx([(e, t) for e in epiregs for t in tabs]) < 0.75,
+      mx([(e, t) for e in epiregs for t in tabs]))
+# epireg vs book > 0.92 is EXPECTED and harmless: both are read exclusively
+# via exact state_lookup (never similarity recall), entries are never dedup
+# targets (archive writes are force_new), and the two live in different
+# compartments. The check below documents the measured value instead of
+# enforcing a band.
+import os as _os  # noqa: E402
+print(f"info epireg vs book similarity: "
+      f"{mx([(e, b) for e in epiregs for b in books]):.3f} (inert: exact-key reads only)")
+check("epireg len<120 (split_chunks guard)",
+      max(len(e) for e in epiregs) < 120, max(len(e) for e in epiregs))
 check("table vs facts < 0.75", mx([(t, f) for t in tabs for f in facts]) < 0.75,
       mx([(t, f) for t in tabs for f in facts]))
 fact_pairs = [(facts[i], facts[j]) for i in range(24) for j in range(i + 1, 24)]

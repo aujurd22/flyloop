@@ -75,34 +75,50 @@ check("book_test ambiguity falls through", rule is None and n_m == 2)
 rule, rank, n_m = reasoner.book_test(cands, [(5, (3 * 5 + 5) % p), (9, 99 % p)], p)
 check("book_test rejects non-matching second pair", rule is None)
 
-# ---- predict hierarchy ----------------------------------------------------
+# ---- predict hierarchy (v4: pre-folded obs, epi_test for MATCHED) ---------
 entries = []  # no memory tables
 obs = [(2, (3 * 2 + 5) % p)]
-y, method, _, _, ab, aux = reasoner.predict_puzzle_v3(
-    entries, 0, 9, 7, cands=cands, obs=[])
+y, method, _, ab, aux = reasoner.predict_puzzle_v4(
+    entries, 0, 9, 7, [], cands=cands, epi_cands=None)
 check("no obs -> not book_test", method in ("cold", "guess"))
-y, method, _, _, ab, aux = reasoner.predict_puzzle_v3(
-    entries, 0, 9, 7, cands=[("r1", 3, 5, 1)], obs=obs)
-check("1-pair book_test fires", method == "book_test" and ab == (3, 5))
+y, method, _, ab, aux = reasoner.predict_puzzle_v4(
+    entries, 0, 9, 7, obs, cands=[("r1", 3, 5, 1)], epi_cands=None)
+check("1-pair book_test fires at probe 1 (pre-fold)", method == "book_test"
+      and ab == (3, 5))
 truth_y = (3 * 7 + 5) % p
 check("book_test prediction correct", y == truth_y)
-# two distinct obs -> fit wins when no candidates
-y2, method2, _, _, ab2, _ = reasoner.predict_puzzle_v3(
-    entries, 0, 9, 7, cands=None, obs=[(2, (3 * 2 + 5) % p), (4, (3 * 4 + 5) % p)])
+y2, method2, _, ab2, _ = reasoner.predict_puzzle_v4(
+    entries, 0, 9, 7, [(2, (3 * 2 + 5) % p), (4, (3 * 4 + 5) % p)],
+    cands=None, epi_cands=None)
 check("2-pair fit recovers rule", method2 == "fit" and ab2 == (3, 5))
+# MATCHED arm: unique episodic-table match -> epi_test -> fit from pooled pairs
+epi_cands = [([(2, (3 * 2 + 5) % p), (4, (3 * 4 + 5) % p)], 3),
+             ([(1, 1), (5, 5)], 2)]
+y3, method3, _, ab3, _ = reasoner.predict_puzzle_v4(
+    entries, 0, 9, 7, obs, cands=None, epi_cands=epi_cands)
+check("epi_test fires on unique table match", method3 == "epi_test" and ab3 == (3, 5),
+      f"method={method3} ab={ab3} y={y3}")
+y3b, method3b, _, _, _ = reasoner.predict_puzzle_v4(
+    entries, 0, 9, 7, [(6, (3 * 6 + 5) % p)], cands=None, epi_cands=epi_cands)
+check("epi_test needs archived x (raw pairs do not generalize)",
+      method3b != "epi_test", f"method={method3b}")
+amb = [([(2, (3 * 2 + 5) % p)], 3), ([(2, (3 * 2 + 5) % p)], 4)]
+y4, method4, _, _, _ = reasoner.predict_puzzle_v4(
+    entries, 0, 9, 7, obs, cands=None, epi_cands=amb)
+check("epi_test ambiguity falls through", method4 != "epi_test")
 # stale fit from memory table
 old_table = f"REDLOG persona【2:11 4:{(3*4+5)%p} | f0 red c=1 e3】"
-y3, method3, _, _, _, _ = reasoner.predict_puzzle_v3(
-    [(1, old_table)], 0, 9, 7, cands=None, obs=[])
-check("stale fallback flagged", method3 == "fit_stale")
+y5, method5, _, _, _ = reasoner.predict_puzzle_v4(
+    [(1, old_table)], 0, 9, 7, [], cands=None, epi_cands=None)
+check("stale fallback flagged", method5 == "fit_stale")
 
-# ---- padding parity -------------------------------------------------------
+# ---- padding parity (v4: three-way) ---------------------------------------
 pad = PadSync()
-pad.charge(100)
-pad.charge(250)
+pad.charge("FULL", 100)
+pad.charge("MATCHED", 250)
 n1 = pad.take(); n2 = pad.take(); n3 = pad.take()
 check("pad fifo + empty", (n1, n2, n3) == (100, 250, None) and
-      pad.parity()["charged"] == 350)
+      pad.parity()["charged_FULL"] == 100 and pad.parity()["charged_MATCHED"] == 250)
 t = pad_text(100, 1)
 check("pad text exact bytes", len(t.encode("ascii")) == 100 and t.startswith(C.PAD_HEAD))
 

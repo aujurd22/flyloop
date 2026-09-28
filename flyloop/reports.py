@@ -68,9 +68,9 @@ def _arm_block(arm, stats):
             f"table={c.get('table_readback_fail')}")
 
 
-def render_v3(snap, detail=False):
+def render_v4(snap, detail=False):
     L = []
-    L.append(f"# flyloop v3 status — {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    L.append(f"# flyloop v4 status — {time.strftime('%Y-%m-%d %H:%M:%S')}")
     L.append("")
     L.append(f"- cycle **{snap['cycle']}**，elapsed **{snap['elapsed_h']:.2f} h** / "
              f"{snap['duration_h']:.0f} h，memory **FULL {snap.get('mode')}**，"
@@ -81,13 +81,14 @@ def render_v3(snap, detail=False):
              f"s{C.QUOTA_SHOCKS}): {q}")
     pp = snap.get("pad_parity")
     if pp:
-        L.append(f"- write parity (FULL book vs EPI pads): {pp}")
+        L.append(f"- three-way write parity (FULL book + MATCHED archive vs "
+                 f"EPI pads): {pp}")
     en = snap.get("entries")
     if en:
         L.append(f"- memory entries: {en}")
     L.append("")
     L.append("## arms (rolling err100)")
-    for arm in ("FULL", "EPI"):
+    for arm in ("FULL", "MATCHED", "EPISODIC"):
         L.append(_arm_block(arm, snap["arm_stats"][arm]))
     L.append("")
     if detail:

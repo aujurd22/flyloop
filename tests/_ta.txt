@@ -1,0 +1,14 @@
+PASS analyzer exits 0 (positive) 
+PASS P01 CONFIRMED {'V4-P01': 'CONFIRMED', 'V4-P02': 'CONFIRMED', 'V4-P03': 'CONFIRMED', 'V4-P04': 'CONFIRMED', 'V4-P05': 'CONFIRMED', 'V4-P06': 'CONFIRMED', 'V4-P07': 'CONFIRMED', 'V4-P08': 'INCONCLUSIVE'}
+PASS P02 CONFIRMED (F<=M<=E planted) 
+PASS P03 CONFIRMED 
+PASS P04 CONFIRMED (probe-1 book_test planted) 
+PASS P05 CONFIRMED (no intrusions planted) 
+PASS P06 CONFIRMED (NEW/VARIANT zero) 
+PASS P07 has phase-C data 
+PASS analysis_v4.md written 
+PASS analyzer exits 0 (negative) 
+PASS P01 INCONCLUSIVE when nothing undiscovered INCONCLUSIVE
+PASS P03 INCONCLUSIVE when nothing undiscovered INCONCLUSIVE
+
+FAILURES: none

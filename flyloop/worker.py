@@ -1,20 +1,21 @@
-"""Overnight worker, v3: two memory arms through the identical world.
+"""Overnight worker, v4: three memory arms through the identical world.
 
-Robustness contract (v1/v2, unchanged): every cycle try/except; N consecutive
-failures trip a circuit breaker -> checkpoint -> exit(3); checkpoint every 50
-cycles / 120s; heartbeat 15s; STATUS 60s; periodic reports; service-down ->
-local mirror with auto-switch-back; RAM red line; deadline in deadline.json.
+Robustness contract (v1/v2/v3, unchanged): every cycle try/except; N
+consecutive failures trip a circuit breaker -> checkpoint -> exit(3);
+checkpoint every 50 cycles / 120s; heartbeat 15s; STATUS 60s; periodic
+reports; service-down -> local mirror with auto-switch-back; RAM red line;
+deadline in deadline.json.
 
-v3 additions (V3_DESIGN.md):
-  - FULL arm (book registry, port MEM_PORT) and EPI arm (tables only,
-    port MEM_PORT_EPI) run the same cycle loop back-to-back, sharing one
-    precomputed world schedule and one PadSync (byte-exact write parity).
-  - quota-stop on episode statistics (NEW/VARIANT/RECALL/shocks);
-  - ENGINEERING_INVALID status: an engineering failure voids the run as a
-    hypothesis test without scoring it as a hypothesis negative;
-  - endpoint verdicts (V3-P01..P08) are applied by experiments/analyze_v3.py,
-    NOT here — the worker pre-registers and stays honest about what it cannot
-    compute in-flight (paired bootstrap).
+v4 additions (V4_DESIGN.md):
+  - three arms: FULL (rule registry + book_test), MATCHED (episodic pair-table
+    archive + epi_test, the SAME unique-match decision rule over raw pairs),
+    EPISODIC (tables + fit only). One sandbox FlyMemory instance per arm
+    (ports MEM_PORT / MEM_PORT_MATCHED / MEM_PORT_EPI).
+  - three-way write parity: EPISODIC's padding writes byte-match
+    FULL.book + MATCHED.archive combined (PadSync charges per source arm).
+  - quota-gated noise phases (world.puz_phase on NEW-episode counts).
+  - pre-registered V4-P01..P08; endpoint verdicts applied by
+    experiments/analyze_v4.py (cluster bootstrap by rule lineage), not here.
 """
 import argparse
 import asyncio
@@ -30,7 +31,8 @@ from .poetleg import PoetLeg
 from .insight import Metrics, Ledger, InsightDetector
 from .cycle import CycleRunner, PadSync
 
-ARMS = ("FULL", "EPI")
+ARMS = ("FULL", "MATCHED", "EPISODIC")
+MEM_URLS = {"FULL": C.MEM_URL, "MATCHED": C.MEM_URL_MATCHED, "EPISODIC": C.MEM_URL_EPI}
 
 
 def log(msg):
@@ -98,12 +100,12 @@ class Worker:
                 return json.load(f)
         return {}
 
-    def _save(self, detF, detE, runF, runE, poets, wall_start):
+    def _save(self, dets, runners, poets, wall_start):
         _atomic_json(self.state_path, {
             "cycle": self.cycle, "wall_start": wall_start,
             "run_status": self.run_status,
-            "detF": detF.to_dict(), "detE": detE.to_dict(),
-            "runnerF": runF.to_dict(), "runnerE": runE.to_dict(),
+            "dets": {arm: dets[arm].to_dict() for arm in ARMS},
+            "runners": {arm: runners[arm].to_dict() for arm in ARMS},
             "poets": {arm: {tag: p.updates for tag, p in poets[arm].items()}
                       for arm in ARMS},
             "ts": time.strftime("%Y-%m-%d %H:%M:%S")})
@@ -118,35 +120,38 @@ class Worker:
             "run_status": self.run_status,
             "ram_gb": ram_avail_gb()})
 
-    # -- v3 registered predictions (registered before the first cycle) --------
+    # -- v4 registered predictions (registered before the first cycle) --------
     def _pre_register(self):
         cmax = self.max_cycles
         r = self.ledger.register
-        r("V3-P01 (PRIMARY): Full arm RECALL error in the first 20 probes lower "
-          "than Episodic, paired bootstrap 95% CI of dE excludes 0",
-          cmax, "run", "unit = RECALL episode; analysis: experiments/analyze_v3.py")
-        r("V3-P02 (PRIMARY): Full arm recovery latency (first correct probe) "
-          "shorter than Episodic on RECALL, paired CI excludes 0",
+        r("V4-P01 (primary, the V3-P06 fix): recurrences of DISCOVERED rules "
+          "show a larger F-vs-E benefit than recurrences of UNDISCOVERED "
+          "rules; cluster-bootstrap CI of the contrast excludes 0",
+          cmax, "run", "requires the pilot-calibrated undiscovered fraction")
+        r("V4-P02 (primary, disentanglement): on recurrences of discovered "
+          "rules E20 orders F <= M <= E (both steps positive); F-M ~ 0 -> "
+          "matcher-dominant, F-M > 0 -> compression adds",
           cmax, "run", "")
-        r("V3-P03: the Full advantage survives at every recurrence gap 2/3/4/5 "
-          "(point estimate of dE in favor of Full in all four buckets)",
+        r("V4-P03: on recurrences of UNDISCOVERED rules MATCHED beats FULL "
+          "(dE20 M-F < 0) — the raw-pair archive wins where abstraction "
+          "failed; the winning representation flips with discovery success",
           cmax, "run", "")
-        r("V3-P04 (NC1): |dE| on VARIANT clearly smaller than on RECALL — the "
-          "Full advantage is recurrence reuse, not generic smartness",
+        r("V4-P04: probe-1 recovery exists — FULL book_test fires at probe 1 "
+          "on RECALL episodes of discovered rules >= 40% (pre-fold interface)",
           cmax, "run", "")
-        r("V3-P05: stale intrusion rate SIR(Full) <= 1.5 x SIR(Episodic) — "
-          "remembering more must not mean confusing past with present",
+        r("V4-P05: stale intrusion rate SIR(FULL) <= 1.5 x SIR(EPISODIC) in "
+          "the three-arm world",
           cmax, "run", "")
-        r("V3-P06: useful-insight rate (discoveries whose rule later pays off on "
-          "a recurrence) above the permutation null (95th pct)",
+        r("V4-P06 (NC1): VARIANT and NEW contrasts ~ 0 for F-E (|mean dE20| "
+          "< 0.05) — the advantage stays recurrence-specific",
           cmax, "run", "")
-        r("V3-P07: Full degrades slower than Episodic from noise phase A (1x) "
-          "to phase C (4x), on RECALL episodes and overall",
+        r("V4-P07: quota-gated phase C is reached and the F-E advantage "
+          "persists there (point estimate > 0)",
           cmax, "run", "")
-        r("V3-P08 (NC2): fact lane shows no regression under the v3 policy: "
-          "phase-C err100 <= 2x phase-A err100 and <= 0.20 absolute, both arms",
+        r("V4-P08 (NC2): fact lane shows no regression in any arm "
+          "(phase-C err <= 2x phase-A err and <= 0.20 absolute)",
           cmax, "run", "")
-        log("[ledger] pre-registered 8 v3 predictions")
+        log("[ledger] pre-registered 8 v4 predictions")
 
     # ------------------------------------------------------------------
     def _quota_state(self, runF, detF):
@@ -159,15 +164,15 @@ class Worker:
         return (q["NEW"] >= C.QUOTA_NEW and q["VARIANT"] >= C.QUOTA_VARIANT
                 and q["RECALL"] >= C.QUOTA_RECALL and q["shocks"] >= C.QUOTA_SHOCKS)
 
-    def _engineering_check(self, runF, runE, entries):
+    def _engineering_check(self, runners, entries):
         """Tripwires that void the run as a hypothesis test (V3 §14)."""
         bad = []
-        for arm, run in (("FULL", runF), ("EPI", runE)):
+        for arm, run in runners.items():
             ct = run.counts
             rb = (ct.get("fact_readback_fail", 0) + ct.get("rulebook_readback_fail", 0)
                   + ct.get("table_readback_fail", 0))
             writes = max(ct.get("fact_writes", 0) + ct.get("book_writes", 0)
-                         + ct.get("pair_writes", 0), 1)
+                         + ct.get("pair_writes", 0) + ct.get("epireg_writes", 0), 1)
             if rb > C.MAX_READBACK_FAIL_FRAC * writes:
                 bad.append(f"{arm}: readback failures {rb}/{writes}")
             n = entries.get(arm)
@@ -208,23 +213,22 @@ class Worker:
             _atomic_json(sched_path, world.puz_schedule())
         self._pre_register_needed = not os.path.exists(self.ledger_path)
 
-        metricsF, metricsE = Metrics(), Metrics()
-        metricsF.load_events(load_events(self.events_path), arm="FULL")
-        metricsE.load_events(load_events(self.events_path), arm="EPI")
+        metrics = {arm: Metrics() for arm in ARMS}
+        for arm in ARMS:
+            metrics[arm].load_events(load_events(self.events_path), arm=arm)
         self.ledger = Ledger(self.ledger_path)
-        detF = InsightDetector(metricsF, self.ledger, log, signatures=False)
-        detE = InsightDetector(metricsE, self.ledger, log, signatures=False)
-        detF.load_dict(st.get("detF", {}))
-        detE.load_dict(st.get("detE", {}))
+        dets = {arm: InsightDetector(metrics[arm], self.ledger, log, signatures=False)
+                for arm in ARMS}
+        for arm in ARMS:
+            dets[arm].load_dict(st.get("dets", {}).get(arm, {}))
 
-        memF = MemFacade(log, C.MEM_URL)
-        memE = MemFacade(log, C.MEM_URL_EPI)
-        self._mems = [memF, memE]
-        await memF.start()
-        await memE.start()
+        mems = {arm: MemFacade(log, MEM_URLS[arm]) for arm in ARMS}
+        self._mems = list(mems.values())
+        for arm in ARMS:
+            await mems[arm].start()
         try:
-            await memF.recall("FLFACT warmup", compartment=C.COMPARTMENT_FACT)
-            await memE.recall("FLFACT warmup", compartment=C.COMPARTMENT_FACT)
+            for arm in ARMS:
+                await mems[arm].recall("FLFACT warmup", compartment=C.COMPARTMENT_FACT)
         except Exception as e:
             log(f"[mem] warmup skipped: {e}")
 
@@ -244,12 +248,11 @@ class Worker:
                         log(f"[poet{arm}-{tag}] load failed ({e}); run marked invalid")
 
         pad = PadSync()
-        runF = CycleRunner(memF, poets["FULL"], detF, self.ledger, log,
-                           arm="FULL", pad_sync=pad)
-        runE = CycleRunner(memE, poets["EPI"], detE, self.ledger, log,
-                           arm="EPI", pad_sync=pad)
-        runF.load_dict(st.get("runnerF", {}))
-        runE.load_dict(st.get("runnerE", {}))
+        runners = {}
+        for arm in ARMS:
+            runners[arm] = CycleRunner(mems[arm], poets[arm], dets[arm],
+                                       self.ledger, log, arm=arm, pad_sync=pad)
+            runners[arm].load_dict(st.get("runners", {}).get(arm, {}))
         if self._pre_register_needed:
             self._pre_register()
 
@@ -257,8 +260,9 @@ class Worker:
         report_n = len([f for f in os.listdir(os.path.join(self.run_dir, "reports"))
                         if f.startswith("report_")])
         end = "unknown"
-        log(f"[worker] v3 start at cycle {self.cycle} (arms FULL@{C.MEM_PORT} / "
-            f"EPI@{C.MEM_PORT_EPI}), deadline "
+        log(f"[worker] v4 start at cycle {self.cycle} "
+            f"(arms FULL@{C.MEM_PORT} / MATCHED@{C.MEM_PORT_MATCHED} / "
+            f"EPISODIC@{C.MEM_PORT_EPI}), deadline "
             f"{time.strftime('%m-%d %H:%M', time.localtime(deadline))}")
 
         while True:
@@ -273,30 +277,32 @@ class Worker:
             if c > self.max_cycles:
                 end = "max cycles"
                 break
-            if C.QUOTA_ENABLED and self._quotas_met(runF, detF):
+            if C.QUOTA_ENABLED and self._quotas_met(runners["FULL"], dets["FULL"]):
                 end = "quota satisfied"
                 break
             try:
                 t0 = time.perf_counter()
-                recF = await runF.run_cycle(c)
-                recE = await runE.run_cycle(c)
+                recs = {}
+                for arm in ARMS:
+                    recs[arm] = await runners[arm].run_cycle(c)
                 self.cycle = c
                 self.fails = 0
                 with open(self.events_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(recF, ensure_ascii=False) + "\n")
-                    f.write(json.dumps(recE, ensure_ascii=False) + "\n")
-                for rec, met in ((recF, metricsF), (recE, metricsE)):
+                    for arm in ARMS:
+                        f.write(json.dumps(recs[arm], ensure_ascii=False) + "\n")
+                for arm in ARMS:
+                    rec = recs[arm]
+                    met = metrics[arm]
                     met.add(c, "seqA", rec.get("seqA_err"))
                     met.add(c, "seqB", rec.get("seqB_err"))
                     met.add(c, "factA", rec.get("factA_err"))
                     met.add(c, "factB", rec.get("factB_err"))
                     if rec.get("lane") == "puzzle":
                         met.add(c, "puzzle", rec.get("error"))
-                detF.on_cycle(c, recF)
-                detE.on_cycle(c, recE)
+                    dets[arm].on_cycle(c, rec)
                 dt = (time.perf_counter() - t0) * 1000
-                if dt < C.SPEED_PACING_MS:
-                    await asyncio.sleep((C.SPEED_PACING_MS - dt) / 1000.0)
+                if dt < C.SPEED_PACING_MS * len(ARMS):
+                    await asyncio.sleep((C.SPEED_PACING_MS * len(ARMS) - dt) / 1000.0)
             except Exception as e:
                 self.fails += 1
                 log(f"[c{c}] cycle FAILED ({self.fails}): "
@@ -306,67 +312,65 @@ class Worker:
                                         "t": time.strftime("%H:%M:%S")}) + "\n")
                 if self.fails >= C.CONSECUTIVE_FAIL_LIMIT:
                     self.run_status = "ENGINEERING_INVALID:consecutive-failures"
-                    self._save(detF, detE, runF, runE, poets, wall_start)
+                    self._save(dets, runners, poets, wall_start)
                     log("circuit breaker OPEN -> checkpoint saved, exit(3)")
                     sys.exit(3)
 
             now = time.time()
             if now - last_hb > C.HEARTBEAT_EVERY_S:
-                self._heartbeat(f"{memF.mode}/{memE.mode}")
+                self._heartbeat("/".join(mems[arm].mode for arm in ARMS))
                 last_hb = now
             if now - last_ckpt > C.CHECKPOINT_EVERY_S or c % C.CHECKPOINT_EVERY_CYCLES == 0:
-                self._save(detF, detE, runF, runE, poets, wall_start)
+                self._save(dets, runners, poets, wall_start)
                 last_ckpt = now
             if now - last_status > C.STATUS_EVERY_S:
-                snap = self._snap(c, wall_start, metricsF, metricsE, detF, runF,
-                                  runE, pad, memF, memE, poets, end="running")
-                reports.write_status(self.run_dir, reports.render_v3(snap))
+                snap = self._snap(c, wall_start, metrics, dets, runners, pad,
+                                  mems, poets, end="running")
+                reports.write_status(self.run_dir, reports.render_v4(snap))
                 last_status = now
             if now - last_report > C.REPORT_EVERY_S:
-                snap = self._snap(c, wall_start, metricsF, metricsE, detF, runF,
-                                  runE, pad, memF, memE, poets, end="running",
-                                  detail=True)
-                reports.write_hourly(self.run_dir, reports.render_v3(snap, detail=True),
+                snap = self._snap(c, wall_start, metrics, dets, runners, pad,
+                                  mems, poets, end="running", detail=True)
+                reports.write_hourly(self.run_dir, reports.render_v4(snap, detail=True),
                                      report_n + 1)
                 report_n += 1
                 last_report = now
-            if memF.mode == "local" and now - last_probe > 30:
-                await memF.probe()
-                last_probe = now
-            if memE.mode == "local" and now - last_probe > 30:
-                await memE.probe()
+            if now - last_probe > 30:
+                for arm in ARMS:
+                    if mems[arm].mode == "local":
+                        await mems[arm].probe()
                 last_probe = now
             await asyncio.sleep(0)
 
         # ---------------- graceful end ----------------
         log(f"[worker] ending: {end} at cycle {self.cycle}")
-        self._save(detF, detE, runF, runE, poets, wall_start)
+        self._save(dets, runners, poets, wall_start)
         entries = {}
-        for arm, mem in (("FULL", memF), ("EPI", memE)):
-            n, _ = await self._mem_entries_count(mem)
+        for arm in ARMS:
+            n, _ = await self._mem_entries_count(mems[arm])
             entries[arm] = n
-        bad = self._engineering_check(runF, runE, entries)
+        bad = self._engineering_check(runners, entries)
         if bad:
             self.run_status = "ENGINEERING_INVALID:" + ";".join(bad)[:150]
-        snap = self._snap(self.cycle, wall_start, metricsF, metricsE, detF, runF,
-                          runE, pad, memF, memE, poets, end=end, detail=True,
-                          entries=entries)
-        reports.write_status(self.run_dir, reports.render_v3(snap))
-        reports.write_final(self.run_dir, reports.render_v3(snap, detail=True), end)
+        snap = self._snap(self.cycle, wall_start, metrics, dets, runners, pad,
+                          mems, poets, end=end, detail=True, entries=entries)
+        reports.write_status(self.run_dir, reports.render_v4(snap))
+        reports.write_final(self.run_dir, reports.render_v4(snap, detail=True), end)
         log(f"[worker] final report written; entries={entries}; "
             f"run_status={self.run_status}; bye")
 
-    def _snap(self, c, wall_start, metricsF, metricsE, detF, runF, runE, pad,
-              memF, memE, poets, end="running", detail=False, entries=None):
+    def _snap(self, c, wall_start, metrics, dets, runners, pad, mems, poets,
+              end="running", detail=False, entries=None):
         snap = reports.build_snapshot(
             c, wall_start, self.duration_h, self.max_cycles,
-            metricsF, detF, runF, self.ledger, memF.mode, None,
-            poets["FULL"], end=end, ram_gb=ram_avail_gb())
+            metrics["FULL"], dets["FULL"], runners["FULL"], self.ledger,
+            mems["FULL"].mode, None, poets["FULL"] if poets else None,
+            end=end, ram_gb=ram_avail_gb())
         snap.update(arm_stats={
-            "FULL": {"metrics": metricsF.summary(c), "counts": runF.counts},
-            "EPI": {"metrics": metricsE.summary(c), "counts": runE.counts}},
+            arm: {"metrics": metrics[arm].summary(c), "counts": runners[arm].counts}
+            for arm in ARMS},
             pad_parity=pad.parity(), run_status=self.run_status,
-            entries=entries or {}, quotas=self._quota_state(runF, detF),
+            entries=entries or {}, quotas=self._quota_state(runners["FULL"], dets["FULL"]),
             expected=world.expected_counts(c))
         return snap
 
@@ -378,41 +382,41 @@ class Worker:
     # ------------------------------------------------------------------
     async def finalize(self):
         """Rebuild everything from disk and write the final report (no cycles).
-        Endpoint verdicts come from experiments/analyze_v3.py, not here."""
+        Endpoint verdicts come from experiments/analyze_v4.py, not here."""
         st = self._load_state()
         self.cycle = st.get("cycle", 0)
         self.run_status = st.get("run_status", "OK")
-        metricsF, metricsE = Metrics(), Metrics()
-        metricsF.load_events(load_events(self.events_path), arm="FULL")
-        metricsE.load_events(load_events(self.events_path), arm="EPI")
+        metrics = {arm: Metrics() for arm in ARMS}
+        for arm in ARMS:
+            metrics[arm].load_events(load_events(self.events_path), arm=arm)
         self.ledger = Ledger(self.ledger_path)
-        detF = InsightDetector(metricsF, self.ledger, log, signatures=False)
-        detE = InsightDetector(metricsE, self.ledger, log, signatures=False)
-        detF.load_dict(st.get("detF", {}))
-        detE.load_dict(st.get("detE", {}))
-        runF = CycleRunner(None, None, detF, self.ledger, log, arm="FULL")
-        runF.load_dict(st.get("runnerF", {}))
-        runE = CycleRunner(None, None, detE, self.ledger, log, arm="EPI")
-        runE.load_dict(st.get("runnerE", {}))
+        dets = {arm: InsightDetector(metrics[arm], self.ledger, log, signatures=False)
+                for arm in ARMS}
+        for arm in ARMS:
+            dets[arm].load_dict(st.get("dets", {}).get(arm, {}))
+        runners = {}
+        for arm in ARMS:
+            r = CycleRunner(None, None, dets[arm], self.ledger, log, arm=arm)
+            r.load_dict(st.get("runners", {}).get(arm, {}))
+            runners[arm] = r
         with open(self.dl_path, encoding="utf-8") as f:
             dl = json.load(f)
-        memF = MemFacade(log, C.MEM_URL)
-        memE = MemFacade(log, C.MEM_URL_EPI)
-        await memF.start()
-        await memE.start()
+        mems = {arm: MemFacade(log, MEM_URLS[arm]) for arm in ARMS}
+        for arm in ARMS:
+            await mems[arm].start()
         entries = {}
-        for arm, mem in (("FULL", memF), ("EPI", memE)):
-            n, _ = await self._mem_entries_count(mem)
+        for arm in ARMS:
+            n, _ = await self._mem_entries_count(mems[arm])
             entries[arm] = n
-        bad = self._engineering_check(runF, runE, entries)
+        bad = self._engineering_check(runners, entries)
         if bad and self.run_status == "OK":
             self.run_status = "ENGINEERING_INVALID:" + ";".join(bad)[:150]
         pad = PadSync()
-        snap = self._snap(self.cycle, dl["wall_start"], metricsF, metricsE, detF,
-                          runF, runE, pad, memF, memE, None,
-                          end="finalized-after-crash", detail=True, entries=entries)
-        reports.write_status(self.run_dir, reports.render_v3(snap))
-        reports.write_final(self.run_dir, reports.render_v3(snap, detail=True),
+        snap = self._snap(self.cycle, dl["wall_start"], metrics, dets, runners,
+                          pad, mems, None, end="finalized-after-crash",
+                          detail=True, entries=entries)
+        reports.write_status(self.run_dir, reports.render_v4(snap))
+        reports.write_final(self.run_dir, reports.render_v4(snap, detail=True),
                             "finalized")
         log(f"[worker] finalized from disk at cycle {self.cycle}; "
             f"run_status={self.run_status}")

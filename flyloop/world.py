@@ -120,11 +120,15 @@ def seq_b_context(cycle: int, ctx: int = None) -> list:
 
 
 # ---------------------------------------------------------------- puzzle lane --
-# v3: episodes follow a PRECOMPUTED recurrent schedule (V3 spec §4). Every
-# family walks a sequence of NEW / VARIANT / RECALL episodes; the schedule is a
-# pure function of SEED (recomputable after a crash, identical for both memory
-# arms) and is also dumped as a run artifact for audit.
+# v4: episodes have VARIABLE lengths in probes (config.EPISODE_PROBE_LENS).
+# Episode boundaries are prefix sums of 8*n_probes cycles; a family is probed
+# at cycles c with c%2==0 and (c//2)%4==f (unchanged cadence — cycle.py's lane
+# alternation depends on it), so an episode of n probes lasts 8n cycles and
+# receives exactly n of the family's probes. Short episodes end before the
+# abstraction loop completes -> discovery-failure variation (V4_DESIGN §3).
 def puz_period(fam: int) -> int:
+    """Deprecated in v4 (variable lengths); kept for callers that only need a
+    scale reference — the mean episode length in cycles."""
     return C.PUZ_PERIOD0 + C.PUZ_PERIOD_STEP * fam
 
 
@@ -132,7 +136,8 @@ _SCHEDULE = None
 
 
 def puz_schedule():
-    """{fam: [episode, ...]} where episode = {i, type, rule_id, a, b, gap}.
+    """{fam: [episode, ...]} where episode = {i, type, rule_id, a, b, gap,
+    n_probes, start_cycle, end_cycle}.
 
     NEW     fresh (a,b), never used in this family (future RECALL candidate)
     VARIANT fresh (a,b) drawn NEAR the previous rule (nonzero deltas) — the
@@ -150,20 +155,22 @@ def puz_schedule():
         by_index = {}          # epoch -> rule_id
         rules = {}             # rule_id -> (a, b)
         counter = 0
-        for i in range(C.MAX_EPISODES):
+        cycle = 0
+        i = 0
+        while cycle < C.SCHEDULE_HORIZON and i < C.MAX_EPISODES_V4:
             u = float(rng.random())
+            can_recall = i >= min(C.RECALL_GAPS)
             if i == 0:
                 typ = "NEW"
+            elif can_recall and u < C.EPISODE_MIX["NEW"]:
+                typ = "NEW"
+            elif can_recall and u < (C.EPISODE_MIX["NEW"]
+                                     + C.EPISODE_MIX["VARIANT"]):
+                typ = "VARIANT"
+            elif can_recall:
+                typ = "RECALL"
             else:
-                can_recall = i >= min(C.RECALL_GAPS)
-                if can_recall and u < C.EPISODE_MIX["NEW"]:
-                    typ = "NEW"
-                elif can_recall and u < C.EPISODE_MIX["NEW"] + C.EPISODE_MIX["VARIANT"]:
-                    typ = "VARIANT"
-                elif can_recall:
-                    typ = "RECALL"
-                else:
-                    typ = "NEW" if u < 0.5 else "VARIANT"
+                typ = "NEW" if u < 0.5 else "VARIANT"
             gap = 0
             if typ == "RECALL":
                 valid = [g for g in C.RECALL_GAPS if g <= i]
@@ -175,12 +182,14 @@ def puz_schedule():
                 pa, pb = episodes[-1]["a"], episodes[-1]["b"]
                 a = (pa + int(rng.choice([1, 2, C.PUZ_P - 1, C.PUZ_P - 2]))) % C.PUZ_P
                 b = (pb + int(rng.choice([1, 2, 3, C.PUZ_P - 1, C.PUZ_P - 2, C.PUZ_P - 3]))) % C.PUZ_P
+                if a == 0:
+                    a = 1
                 rid = f"f{fam}r{counter}"; counter += 1
                 rules[rid] = (a, b)
             else:  # NEW
                 # only p*(p-1) = 156 distinct rules exist per family; cap the
-                # draw and fall back to the least-recently-used pair (the cap
-                # cannot bind statistically: NEW ~ 0.5 * MAX_EPISODES << 156)
+                # draw and fall back to a VARIANT of the previous rule (the
+                # cap binds only near the end of the horizon)
                 for _ in range(200):
                     a = int(rng.integers(1, C.PUZ_P))
                     b = int(rng.integers(0, C.PUZ_P))
@@ -189,26 +198,35 @@ def puz_schedule():
                 else:
                     a, b = episodes[-1]["a"], episodes[-1]["b"]
                     typ = "VARIANT"
-                    rid = f"f{fam}r{counter}"; counter += 1
-                    rules[rid] = (a, b)
-                    used.add((a, b))
-                    by_index[i] = rid
-                    episodes.append({"i": i, "type": typ, "rule_id": rid,
-                                     "a": a, "b": b, "gap": 0})
-                    continue
                 rid = f"f{fam}r{counter}"; counter += 1
                 rules[rid] = (a, b)
             used.add((a, b))
             by_index[i] = rid
+            n_probes = int(rng.choice(C.EPISODE_PROBE_LENS, p=C.EPISODE_PROBE_WEIGHTS))
             episodes.append({"i": i, "type": typ, "rule_id": rid,
-                             "a": a, "b": b, "gap": gap})
+                             "a": a, "b": b, "gap": gap, "n_probes": n_probes,
+                             "start_cycle": cycle,
+                             "end_cycle": cycle + C.PUZ_PROBE_CADENCE * n_probes})
+            cycle = episodes[-1]["end_cycle"]
+            i += 1
         sched[fam] = episodes
     _SCHEDULE = sched
     return sched
 
 
 def puz_epoch(fam: int, cycle: int) -> int:
-    return cycle // puz_period(fam)
+    """Index of the episode whose [start_cycle, end_cycle) contains cycle."""
+    eps = puz_schedule()[fam]
+    lo, hi = 0, len(eps) - 1
+    if cycle >= eps[-1]["end_cycle"]:
+        return len(eps) - 1
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if cycle < eps[mid]["end_cycle"]:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
 
 
 def puz_episode(fam: int, cycle: int) -> dict:
@@ -224,14 +242,28 @@ def puz_episode_counts(cycle: int) -> dict:
     """Cumulative NEW/VARIANT/RECALL episode starts at or before `cycle`."""
     counts = {"NEW": 0, "VARIANT": 0, "RECALL": 0}
     for fam in range(C.PUZ_FAMILIES):
-        n = min(puz_epoch(fam, cycle) + 1, C.MAX_EPISODES)
-        for ep in puz_schedule()[fam][:n]:
-            counts[ep["type"]] += 1
+        for ep in puz_schedule()[fam]:
+            if ep["start_cycle"] <= cycle:
+                counts[ep["type"]] += 1
+            else:
+                break
     return counts
 
 
+def puz_phase(cycle: int) -> str:
+    """Quota-gated noise phase: advance on cumulative NEW-episode starts
+    (pooled over families), never on cycle thresholds (V3 P07/P08 lesson)."""
+    n_new = puz_episode_counts(cycle)["NEW"]
+    phase = C.NOISE_PHASE_GATES[0][0]
+    for name, gate in C.NOISE_PHASE_GATES:
+        if n_new >= gate:
+            phase = name
+    return phase
+
+
 def puz_rotation_cycle(fam: int, epoch: int) -> int:
-    return epoch * puz_period(fam)
+    eps = puz_schedule()[fam]
+    return eps[epoch]["start_cycle"] if epoch < len(eps) else None
 
 
 def puz_probe(fam: int, cycle: int):
@@ -246,9 +278,22 @@ def puz_probe(fam: int, cycle: int):
 
 
 def puz_rotation_events(cycle: int) -> list:
+    """Episode boundaries at this exact cycle (one per family), for the
+    drift-event log and insight detector."""
     evs = []
+    if cycle <= 0:
+        return evs
     for f in range(C.PUZ_FAMILIES):
-        if cycle > 0 and cycle % puz_period(f) == 0:
+        eps = puz_schedule()[f]
+        # bisect: does any episode START at this cycle?
+        lo, hi = 0, len(eps) - 1
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if eps[mid]["start_cycle"] < cycle:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo < len(eps) and eps[lo]["start_cycle"] == cycle:
             evs.append(("rotate", f))
     return evs
 
@@ -261,6 +306,12 @@ def distractor_text(cycle: int) -> str:
         h = hashlib.md5(r.bytes(8)).hexdigest()[:7]
         words.append(f"zx{h}")
     return "噪声条目 " + " ".join(words)
+
+
+def noise_every(cycle: int) -> int:
+    """Three-phase distractor pressure, gated on cumulative NEW episodes
+    (pure function of the schedule — cycle.py calls this per cycle)."""
+    return C.NOISE_EVERY_BY_PHASE[puz_phase(cycle)]
 
 
 # ---------------------------------------------------------------- helpers ------

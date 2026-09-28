@@ -76,8 +76,9 @@ def ensure_service(port: int, db_path: str, timeout=90):
 
 
 def ensure_services(run_dir):
-    """One store per memory arm (v3): FULL on MEM_PORT, EPI on MEM_PORT_EPI."""
+    """One store per memory arm (v4): FULL / MATCHED / EPISODIC."""
     ensure_service(C.MEM_PORT, os.path.join(run_dir, "mem_FULL.pkl"))
+    ensure_service(C.MEM_PORT_MATCHED, os.path.join(run_dir, "mem_MATCHED.pkl"))
     ensure_service(C.MEM_PORT_EPI, os.path.join(run_dir, "mem_EPI.pkl"))
 
 
@@ -154,12 +155,12 @@ def main():
                 break
             if time.time() - last_service_check > 20:
                 last_service_check = time.time()
-                if not port_open(C.MEM_HOST, C.MEM_PORT):
-                    tlog("[service] FULL down mid-run; respawning (idempotent)")
-                    spawn_service(C.MEM_PORT, os.path.join(run_dir, "mem_FULL.pkl"))
-                if not port_open(C.MEM_HOST, C.MEM_PORT_EPI):
-                    tlog("[service] EPI down mid-run; respawning (idempotent)")
-                    spawn_service(C.MEM_PORT_EPI, os.path.join(run_dir, "mem_EPI.pkl"))
+                for port, dbf, tag in ((C.MEM_PORT, "mem_FULL.pkl", "FULL"),
+                                       (C.MEM_PORT_MATCHED, "mem_MATCHED.pkl", "MATCHED"),
+                                       (C.MEM_PORT_EPI, "mem_EPI.pkl", "EPI")):
+                    if not port_open(C.MEM_HOST, port):
+                        tlog(f"[service] {tag} down mid-run; respawning (idempotent)")
+                        spawn_service(port, os.path.join(run_dir, dbf))
         rc = proc.returncode
         tlog(f"[supervisor] worker exited rc={rc}")
 
