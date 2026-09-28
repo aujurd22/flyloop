@@ -27,7 +27,44 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from analyze_v4 import load_probes, load_insights, boot_ci_clustered  # noqa: E402
+from analyze_v4 import load_insights, boot_ci_clustered  # noqa: E402
+
+ARMS = ("FULL-RAW", "MATCHED-VER")
+
+
+def load_probes_v7(run_dir):
+    """Arm-agnostic loader: any memory_arm value gets its own episode dict."""
+    out = {}
+    path = os.path.join(run_dir, "events.jsonl")
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("lane") != "puzzle":
+                continue
+            arm = r.get("memory_arm", "FULL")
+            out.setdefault(arm, {})
+            key = (r.get("family"), r.get("epoch"))
+            ep = out[arm].setdefault(key, {"probes": [], "type": r.get("episode_type"),
+                                           "gap": r.get("rule_age", 0),
+                                           "rule_id": r.get("rule_id"),
+                                           "start_c": None})
+            ep["probes"].append({
+                "idx": r.get("probe_idx", len(ep["probes"]) + 1),
+                "c": r.get("c"), "error": int(bool(r.get("error"))),
+                "method": r.get("method"),
+                "stale": int(bool(r.get("stale_intrusion"))),
+                "rule_id": r.get("rule_id")})
+            if ep["start_c"] is None:
+                ep["start_c"] = r.get("c")
+    for arm in out:
+        for ep in out[arm].values():
+            ep["probes"].sort(key=lambda p: p["idx"])
+            first20 = ep["probes"][:20]
+            ep["e20"] = sum(p["error"] for p in first20)
+    return out
 
 
 def contrast(d1, c1, d0, c0, n_boot=10000, seed=23):
@@ -49,11 +86,9 @@ def contrast(d1, c1, d0, c0, n_boot=10000, seed=23):
         float(np.percentile(means, 97.5))
 
 
-def cell_gaps(run_dir):
-    """Per-episode (M−F) gaps + rule clusters + episode metadata."""
-    arms = load_probes(run_dir)
-    F, M = arms["FULL-RAW"] if "FULL-RAW" in arms else arms["FULL"], \
-        arms["MATCHED-VER"] if "MATCHED-VER" in arms else arms["MATCHED"]
+def cell_gaps(arms, f_arm, m_arm):
+    """Per-episode (M-side − F-side) gaps + rule clusters."""
+    F, M = arms[f_arm], arms[m_arm]
     keys = sorted(set(F) & set(M))
     rows = []
     for k in keys:
@@ -71,8 +106,8 @@ def main():
     ap.add_argument("--boot", type=int, default=10000)
     args = ap.parse_args()
     ref, run = os.path.abspath(args.ref), os.path.abspath(args.run)
-    ref_rows = cell_gaps(ref)
-    run_rows = cell_gaps(run)
+    ref_rows = cell_gaps(load_probes_v7(ref), "FULL", "MATCHED")
+    run_rows = cell_gaps(load_probes_v7(run), "FULL-RAW", "MATCHED-VER")
     lines = []
 
     def say(s=""):
@@ -83,16 +118,14 @@ def main():
     say(f"ref={args.ref}  run={args.run}")
     say(f"episodes: ref n={len(ref_rows)}, run n={len(run_rows)}")
 
-    def gaps(rows, pred):
-        return np.array([r["gap"] for r in rows if pred(r)], float), \
-            [r["rule"] for r in rows if pred(r)]
-
     # cells: rule-lineage pairing is not required across runs (independent
     # draws of the same schedule); each cell's mean is cluster-bootstrapped
     F = np.array([r["gap"] for r in ref_rows], float)        # verified/full (M-F gaps)
     T = np.array([r["gap"] for r in run_rows], float)        # raw/ver (M-VER - F-RAW)
-    loF, hiF = boot_ci_clustered(F, [r["rule"] for r in ref_rows], args.boot)
-    loT, hiT = boot_ci_clustered(T, [r["rule"] for r in run_rows], args.boot)
+    rF = boot_ci_clustered(F, [r["rule"] for r in ref_rows], args.boot)
+    rT = boot_ci_clustered(T, [r["rule"] for r in run_rows], args.boot)
+    loF, hiF = rF[1], rF[2]
+    loT, hiT = rT[1], rT[2]
     say(f"dW_sparse (M vs M-VER, ref run):  {float(np.mean(F)):.3f} "
         f"CI[{loF:.3f},{hiF:.3f}] n={len(F)}")
     say(f"dW_full_raw (M-VER vs F-RAW, run): {float(np.mean(T)):.3f} "
@@ -102,7 +135,7 @@ def main():
     # across DIFFERENT runs — not paired (different arms wrote them); use
     # independent cluster bootstrap on each side's mean
     def arm_mean(run_dir, arm):
-        arms = load_probes(run_dir)
+        arms = load_probes_v7(run_dir)
         A = arms[arm]
         keys = sorted(set(A))
         rec = [k for k in keys if A[k]["type"] == "RECALL"]

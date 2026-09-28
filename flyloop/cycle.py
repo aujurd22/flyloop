@@ -327,12 +327,12 @@ class CycleRunner:
         entries = parse_recall(block_t)
         cands = None
         epi_cands = None
-        if self.arm == "FULL":
+        if self.arm in ("FULL", "FULL-RAW"):
             block_b, _ = await self.mem.state_lookup(book_state_key(fam))
             self.counts["recalls"] += 1
             registry = reasoner.parse_book_v3(block_b, fam)
             cands = reasoner.book_candidates(registry, C.BOOK_CAP)
-        elif self.arm == "MATCHED":
+        elif self.arm in ("MATCHED", "MATCHED-VER"):
             # exact state_lookup over the runner's own archive index (RAM
             # mirror of written keys) — similarity-based recall would rank
             # same-family archive entries arbitrarily (heads identical)
@@ -353,7 +353,7 @@ class CycleRunner:
         y, method, n_ver, ab, aux = reasoner.predict_puzzle_v4(
             entries, fam, epoch, xp, obs, cands=cands, epi_cands=epi_cands)
 
-        stale_present = bool(cands) if self.arm == "FULL" else \
+        stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW") else \
             any(int(m.group(5)) != epoch for m in
                 [reasoner.P_PAIRS.search(t) for _, t in entries]
                 if m and int(m.group(2)) == fam)
