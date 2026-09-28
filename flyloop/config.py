@@ -228,7 +228,7 @@ PAD_HEAD = "PADLOG"
 # rules stay <120 chars forever, and RECALL gaps are 2-5 epochs, so the cap
 # loses no recurrence coverage.
 BOOK_STATE_KEY = "flyloop/book/f{fam}"
-BOOK_CAP = 5                # recent rules kept per family (gaps are 2-5)
+BOOK_CAP = int(os.environ.get("FLYLOOP_BOOK_CAP", "5"))  # recent rules kept per family (gaps are 2-5); RSI-0 M1 mutates this
 # v4 MATCHED arm: episodic pair-table archive, one entry per episode (unique
 # state_key per episode -> no in-place overwrites -> history survives), same
 # cap depth as the book. The archive entry text reuses the table payload
