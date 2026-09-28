@@ -136,10 +136,12 @@ EPISODE_PROBE_WEIGHTS = [0.15, 0.15, 0.25, 0.25, 0.20]
 NOISE_EPS = float(os.environ.get("FLYLOOP_NOISE_EPS", "0"))
 # V6 tolerant matching: a memory candidate (rule / archived table) matches the
 # live observations when it reproduces >= MATCH_MIN_FRAC of them exactly
-# (strict argmax, recency tiebreak). 1.0 = exact (V4/V5 behavior). Under flip
-# noise the true rule reproduces ~0.75 of live pairs while wrong rules sit at
-# ~1/13 — the fraction separates them where the all-pairs criterion could not
-# (V6_DESIGN.md). Scoring stays exact; only identification is tolerant.
+# (strict argmax; a tie at the top is a REFUSAL, not a recency tiebreak —
+# ambiguous identification is refused, consistent with the exact matcher's
+# unique-match discipline). 1.0 = exact (V4/V5 behavior). Under flip
+# noise the true rule reproduces ~0.75 of live pairs while wrong rules sit
+# at ~1/13 — the fraction separates them where the all-pairs criterion could
+# not (V6_DESIGN.md). Scoring stays exact; only identification is tolerant.
 MATCH_MIN_FRAC = float(os.environ.get("FLYLOOP_MATCH_MIN_FRAC", "1.0"))
 # horizon/mix arithmetic (do not eyeball): mean length 17 probes = 136 cycles
 # -> ~310 episodes/family in 42k cycles -> NEW ~155/family, just inside the

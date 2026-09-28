@@ -15,7 +15,9 @@ not of the representation. V6 changes exactly one thing.
 behavior). At 0.6, a memory candidate (rule for FULL, archived table for
 MATCHED) matches the live observations when it reproduces **≥ 60% of the
 live pairs exactly**, adopting the strictly-best candidate (ties broken by
-recency — the V4 candidate order). Rationale: under ε=0.25 flip noise the
+recency — the V4 candidate order; note the final implementation refuses
+top-rank ties outright instead of breaking them by recency — reviewer
+option A, ambiguous identification is refused). Rationale: under ε=0.25 flip noise the
 TRUE rule reproduces unflipped pairs exactly (~75% of pairs) — above the
 band; wrong rules sit at ~1/13 ≈ 8% — far below. The fraction criterion
 separates them where the all-pairs criterion could not.
@@ -23,7 +25,8 @@ separates them where the all-pairs criterion could not.
 Matcher composition (both memory arms, same decision rule):
 1. exact unique match (kept first: probe-1 shortcut survives when the live
    pair is unflipped — 75% of pairs);
-2. fraction-best match (≥ MATCH_MIN_FRAC, strict argmax, recency tiebreak)
+2. fraction-best match (≥ MATCH_MIN_FRAC, strict argmax; a top-rank tie is
+   a refusal, not a recency tiebreak)
    — the noise antidote, live from probe 2 (needs ≥ 2 live pairs for the
    fraction to mean anything);
 3. live fit → stale fit → guess/cold (unchanged).
