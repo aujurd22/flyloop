@@ -380,8 +380,18 @@ def main():
                   ("PARTIAL" if frac4 >= 0.20 else "REFUTED"),
                   f"{p1_hit}/{len(p1)} = {frac4:.3f}")
         if ratio is not None:
-            apply("P05", "CONFIRMED" if ratio <= 1.5 else "REFUTED",
-                  f"SIR F={s['FULL']:.4f} E={s['EPISODIC']:.4f} ratio={ratio:.3f}")
+            # near-zero base rates make the ratio band meaningless (V4 early
+            # stop: F=2, E=0 of 652 probes each — Fisher p=0.5, no signal);
+            # require enough intrusions to read the ratio at all
+            f_num = s["FULL_raw"][0]
+            if f_num + s["EPISODIC_raw"][0] < 20:
+                apply("P05", "INCONCLUSIVE",
+                      f"intrusion counts too small to read the band "
+                      f"(F={s['FULL_raw']}, E={s['EPISODIC_raw']}); "
+                      f"both arms effectively intrusion-free at this scale")
+            else:
+                apply("P05", "CONFIRMED" if ratio <= 1.5 else "REFUTED",
+                      f"SIR F={s['FULL']:.4f} E={s['EPISODIC']:.4f} ratio={ratio:.3f}")
         apply("P06", "CONFIRMED" if ok6 else "REFUTED", str(nc))
         apply("P07", "CONFIRMED" if ok7 else
               ("INCONCLUSIVE" if not reached_c else "REFUTED"),
@@ -456,7 +466,7 @@ def make_figures(arms, run_dir, first_disc, ph, results):
             data.append(lat)
             labels.append(f"{arm}\n(n={len(lat)})")
     if data:
-        ax.boxplot(data, labels=labels)
+        ax.boxplot(data, tick_labels=labels)
         ax.set_ylabel("recovery latency (probe idx)")
         ax.set_title("discovered-rule RECALL recovery latency")
     fig.tight_layout()
