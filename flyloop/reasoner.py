@@ -106,22 +106,27 @@ def book_test(cands, pairs, p: int):
     return None, 0, len(matches)
 
 
-def frac_best(cands, pairs, p: int, min_frac: float):
+def frac_best(cands, pairs, p: int, min_frac: float, tol: int = 0):
     """Tolerant matcher (V6): score each candidate by the FRACTION of live
-    pairs it reproduces exactly; adopt ONLY a strict argmax that clears
-    min_frac — a tie at the top is a REFUSAL, not a recency tiebreak
-    (ambiguous identification is refused, consistent with the exact
-    matcher's unique-match discipline; reviewer option A, 2026-09-28).
-    Under flip noise the true rule reproduces ~0.75 of live pairs while
-    wrong rules sit near 1/p, so the fraction separates them where the
-    all-pairs criterion could not. Returns (candidate, rank, frac) or
-    (None, 0, best_frac)."""
+    pairs it reproduces (exact at tol=0; within +-tol on the mod circle for
+    the wavy world); adopt ONLY a strict argmax that clears min_frac — a tie
+    at the top is a REFUSAL, not a recency tiebreak (ambiguous identification
+    is refused, consistent with the exact matcher's unique-match discipline;
+    reviewer option A, 2026-09-28). Under flip noise the true rule
+    reproduces ~0.75 of live pairs while wrong rules sit near 1/p, so the
+    fraction separates them where the all-pairs criterion could not.
+    Returns (candidate, rank, frac) or (None, 0, best_frac)."""
     if not pairs:
         return None, 0, 0.0
+
+    def ok(pred, y):
+        d = (pred - y) % p
+        return min(d, p - d) <= tol
+
     scored = []
     for rank, cand in enumerate(cands, start=1):
         a, b = cand[1], cand[2]
-        hit = sum(1 for x, y in pairs if (a * x + b) % p == y)
+        hit = sum(1 for x, y in pairs if ok((a * x + b) % p, y))
         scored.append((hit / len(pairs), -rank, cand, rank))
     scored.sort(reverse=True)
     best_frac, _, best, best_rank = scored[0]
@@ -130,21 +135,29 @@ def frac_best(cands, pairs, p: int, min_frac: float):
     return best, best_rank, best_frac
 
 
-def epi_test(cands, obs, min_frac: float = 1.0):
+def epi_test(cands, obs, min_frac: float = 1.0, tol: int = 0):
     """MATCHED arm's matcher: the SAME decision rule as the book matcher, but
     candidates are RAW episodic pair tables instead of compressed rules. A
-    candidate's score = fraction of live pairs it reproduces exactly (an x
-    absent from the candidate's table cannot be verified -> misses the
-    fraction). ONLY a strict argmax at min_frac adopts — a tie at the top is
-    a refusal, not a recency tiebreak (same discipline as frac_best). Raw
-    pairs do not generalize — that IS the representation difference under
-    test. Returns (candidate, rank, frac) where candidate = (pairs, ep)."""
+    candidate's score = fraction of live pairs it reproduces (exact at tol=0;
+    within +-tol on the mod circle for the wavy world). ONLY a strict argmax
+    at min_frac adopts — a tie at the top is a refusal, not a recency
+    tiebreak (same discipline as frac_best). In the wavy world the stored
+    pairs of the SAME rule remain exactly valid across visits (the wave is
+    rule-stable) while the prototype never does — that asymmetry is the
+    representation difference under test. Returns (candidate, rank, frac)
+    where candidate = (pairs, ep)."""
     if not obs:
         return None, 0, 0.0
+    p = C.PUZ_P
+
+    def ok(sy, y):
+        d = (sy - y) % p
+        return min(d, p - d) <= tol
+
     scored = []
     for rank, (pairs, ep) in enumerate(cands, start=1):
         table = dict(pairs)
-        hit = sum(1 for x, y in obs if x in table and table[x] == y)
+        hit = sum(1 for x, y in obs if x in table and ok(table[x], y))
         scored.append((hit / len(obs), -rank, (pairs, ep), rank))
     scored.sort(reverse=True)
     best_frac, _, best, best_rank = scored[0]
@@ -274,8 +287,11 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
             rule, rank, n_m = book_test(test_cands, obs, p)
             if rule is None and C.MATCH_MIN_FRAC < 1.0 and len(obs) >= 2:
                 # V6 tolerant fallback: the true rule reproduces ~0.75 of
-                # flip-noisy live pairs while wrong rules sit near 1/p
-                rule, rank, frac = frac_best(test_cands, obs, p, C.MATCH_MIN_FRAC)
+                # flip-noisy live pairs while wrong rules sit near 1/p;
+                # V7B: tol=WAVE_TOL lets the prototype sit within the wave
+                # band of the live pairs
+                rule, rank, frac = frac_best(test_cands, obs, p, C.MATCH_MIN_FRAC,
+                                             tol=C.WAVE_TOL)
                 if rule is not None:
                     rid, a, b, _ = rule
                     return ((a * xp + b) % p, "book_test", 1, (a, b),
@@ -289,9 +305,10 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
     if epi_cands and obs:
         epi_pool = [(pairs, ep) for pairs, ep in epi_cands if ep != epoch][
             :C.EPIREG_CAP]
-        cand, rank, n_m = epi_test(epi_pool, obs)
+        cand, rank, n_m = epi_test(epi_pool, obs, tol=C.WAVE_TOL)
         if cand is None and C.MATCH_MIN_FRAC < 1.0 and len(obs) >= 2:
-            cand, rank, frac = epi_test(epi_pool, obs, min_frac=C.MATCH_MIN_FRAC)
+            cand, rank, frac = epi_test(epi_pool, obs, min_frac=C.MATCH_MIN_FRAC,
+                                        tol=C.WAVE_TOL)
             if cand is not None:
                 cpairs, cep = cand
                 ab = fit_from(list(cpairs) + obs, p)

@@ -266,19 +266,42 @@ def puz_rotation_cycle(fam: int, epoch: int) -> int:
     return eps[epoch]["start_cycle"] if epoch < len(eps) else None
 
 
+def puz_wave(fam: int, cycle: int) -> int:
+    """V7 Phase B: the per-(episode, x) fixed offset of the wavy affine map.
+    Pure function of (fam, epoch, x): the same x in the same episode always
+    carries the same offset, so the episode's raw pairs are self-consistent
+    while no compact (a, b) reproduces them (V7_DESIGN §2)."""
+
+
 def puz_probe(fam: int, cycle: int):
     """One revealed example pair + a probe x whose y is hidden until scored.
     V5: the revealed y1 is corrupted with probability NOISE_EPS (measurement
     noise — truth stays exact; the flip is a pure function of the same keys,
-    so all arms see identical observations)."""
+    so all arms see identical observations).
+    V7B: with WAVE_AMP > 0 the episode's map is a WAVY affine — y carries a
+    SMOOTH per-rule sinusoid wav(x) = round(W sin(2pi(x+phi)/p)), phase phi
+    seeded per rule_id and STABLE across episodes. Consequence: a compact
+    (a, b) prototype always misses the wave (irreducible +-W error), while
+    instances of the SAME rule accumulate its wave across visits — the P46
+    prototype-exemplar dissociation, in-loop."""
+    ep = puz_episode(fam, cycle)
     r = _rng("puz", "probe", fam, cycle)
     a, b = puz_rule(fam, cycle)
     x1 = int(r.integers(0, C.PUZ_P))
     xp = int(r.integers(0, C.PUZ_P))
-    y1 = (a * x1 + b) % C.PUZ_P
+
+    def wave(x):
+        if C.WAVE_AMP <= 0:
+            return 0
+        import math
+        rw = _rng("puz", "wavephase", fam, ep["rule_id"])
+        phi = float(rw.random()) * C.PUZ_P
+        return int(round(C.WAVE_AMP * math.sin(2 * math.pi * (x + phi) / C.PUZ_P)))
+
+    y1 = (a * x1 + b + wave(x1)) % C.PUZ_P
     if C.NOISE_EPS > 0 and float(r.random()) < C.NOISE_EPS:
         y1 = (y1 + int(r.integers(1, C.PUZ_P))) % C.PUZ_P
-    truth = (a * xp + b) % C.PUZ_P
+    truth = (a * xp + b + wave(xp)) % C.PUZ_P
     return (x1, y1), xp, truth
 
 

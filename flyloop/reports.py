@@ -88,7 +88,7 @@ def render_v4(snap, detail=False):
         L.append(f"- memory entries: {en}")
     L.append("")
     L.append("## arms (rolling err100)")
-    for arm in ("FULL", "MATCHED", "EPISODIC"):
+    for arm in snap["arm_stats"]:
         L.append(_arm_block(arm, snap["arm_stats"][arm]))
     L.append("")
     if detail:

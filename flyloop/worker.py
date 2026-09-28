@@ -31,8 +31,16 @@ from .poetleg import PoetLeg
 from .insight import Metrics, Ledger, InsightDetector
 from .cycle import CycleRunner, PadSync
 
-ARMS = ("FULL", "MATCHED", "EPISODIC")
-MEM_URLS = {"FULL": C.MEM_URL, "MATCHED": C.MEM_URL_MATCHED, "EPISODIC": C.MEM_URL_EPI}
+ARMS = tuple(os.environ.get(
+    "FLYLOOP_ARMS", "FULL,MATCHED,EPISODIC").split(","))
+# V7 factorial runs swap arms via env (e.g. "FULL-RAW,MATCHED-VER"); the two
+# new arms reuse the FULL/MATCHED service instances (fresh per-run DBs, so no
+# cross-run contamination).
+MEM_URLS = {
+    "FULL": C.MEM_URL, "MATCHED": C.MEM_URL_MATCHED, "EPISODIC": C.MEM_URL_EPI,
+    "FULL-RAW": C.MEM_URL, "MATCHED-VER": C.MEM_URL_EPI,
+}
+PREDSET = os.environ.get("FLYLOOP_PREDSET", "V4")
 
 
 def log(msg):
@@ -120,10 +128,32 @@ class Worker:
             "run_status": self.run_status,
             "ram_gb": ram_avail_gb()})
 
-    # -- v4 registered predictions (registered before the first cycle) --------
+    # -- registered predictions (registered before the first cycle) ----------
     def _pre_register(self):
         cmax = self.max_cycles
         r = self.ledger.register
+        if PREDSET == "V7A":
+            claims = {
+                "V7-P01": "V7-P01 (support dominance): |dE20(F - F-RAW)| < "
+                          "|dE20(M - M-VER)| under eps=0.25 -- support size "
+                          "explains more of the advantage than write "
+                          "verification (cluster CIs; cross-run pairing with "
+                          "V5B as the verified/raw reference cells)",
+                "V7-P02": "V7-P02: unverified full-support rule writes hurt -- "
+                          "dE20(F-RAW vs F) > 0 (poisoned rules covering all x)",
+                "V7-P03": "V7-P03: verified sparse archive helps -- "
+                          "dE20(M-VER vs M) <= 0",
+                "V7-P04": "V7-P04: SIR(F-RAW) > SIR(F) -- poisoned rules "
+                          "intrude more (absolute counts reported, floor-gated)",
+                "V7-P05": "V7-P05: interaction sign -- the write-verification "
+                          "effect is larger at full support than at sparse: "
+                          "(dW_full - dW_sparse) > 0",
+            }
+            for pid, claim in claims.items():
+                r(claim, cmax, "run", "V7 Phase A factorial; cross-run pairing "
+                  "with V5B; adjudication experiments/compare_v7.py")
+            log("[ledger] pre-registered 5 v7 Phase A predictions")
+            return
         r("V4-P01 (primary, the V3-P06 fix): recurrences of DISCOVERED rules "
           "show a larger F-vs-E benefit than recurrences of UNDISCOVERED "
           "rules; cluster-bootstrap CI of the contrast excludes 0",
@@ -277,7 +307,7 @@ class Worker:
             if c > self.max_cycles:
                 end = "max cycles"
                 break
-            if C.QUOTA_ENABLED and self._quotas_met(runners["FULL"], dets["FULL"]):
+            if C.QUOTA_ENABLED and self._quotas_met(runners[ARMS[0]], dets[ARMS[0]]):
                 end = "quota satisfied"
                 break
             try:
@@ -363,14 +393,14 @@ class Worker:
               end="running", detail=False, entries=None):
         snap = reports.build_snapshot(
             c, wall_start, self.duration_h, self.max_cycles,
-            metrics["FULL"], dets["FULL"], runners["FULL"], self.ledger,
-            mems["FULL"].mode, None, poets["FULL"] if poets else None,
+            metrics[ARMS[0]], dets[ARMS[0]], runners[ARMS[0]], self.ledger,
+            mems[ARMS[0]].mode, None, poets[ARMS[0]] if poets else None,
             end=end, ram_gb=ram_avail_gb())
         snap.update(arm_stats={
             arm: {"metrics": metrics[arm].summary(c), "counts": runners[arm].counts}
             for arm in ARMS},
             pad_parity=pad.parity(), run_status=self.run_status,
-            entries=entries or {}, quotas=self._quota_state(runners["FULL"], dets["FULL"]),
+            entries=entries or {}, quotas=self._quota_state(runners[ARMS[0]], dets[ARMS[0]]),
             expected=world.expected_counts(c))
         return snap
 

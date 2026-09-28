@@ -304,7 +304,7 @@ class CycleRunner:
         d = self.disc.setdefault((fam, epoch), {
             "consec": 0, "done": False, "table": {}, "table_id": None,
             "unseen_since_write": 0, "probes": 0, "ep_counted": False,
-            "adopted": None, "archived": False})
+            "adopted": None, "archived": False, "verified": False})
         probe_idx = d["probes"] + 1
         if not d["ep_counted"]:
             d["ep_counted"] = True
@@ -414,8 +414,13 @@ class CycleRunner:
         # would rewrite older episodes' entries and the archive would
         # degenerate to one entry per family (the >120-char lesson's sibling).
         # Unique per-episode state_keys + force_new keep every episode's row.
-        if (self.arm == "MATCHED" and not d["archived"]
-                and d["probes"] >= wep["n_probes"]):
+        # MATCHED-VER (V7 factorial, verified-write cell): the archive write
+        # is gated on consec-3 instead of episode end -- rows enter only
+        # after 3 consecutive correct predictions from their own content.
+        ver_gate = (self.arm == "MATCHED-VER" and d.get("verified", False))
+        if (self.arm in ("MATCHED", "MATCHED-VER") and not d["archived"]
+                and (ver_gate or
+                     (self.arm == "MATCHED" and d["probes"] >= wep["n_probes"]))):
             pairs_s = " ".join(f"{x}:{v}" for x, v in
                                list(d["table"].items())[-5:])
             text = epireg_text(fam, epoch, c, pairs_s)
@@ -435,14 +440,31 @@ class CycleRunner:
             if self.pad_sync is not None:
                 self.pad_sync.charge("MATCHED", nbytes)
 
-        # discovery / re-activation -> RULEBOOK update (FULL arm only)
-        if method == "fit" and err == 0 and n_ver >= 1:
+        # discovery / re-activation -> RULEBOOK update (FULL family arms).
+        # V7 factorial: the WRITE gate is the manipulated factor --
+        #   FULL      consec >= PUZ_DISC_CONSEC (verified)
+        #   FULL-RAW  consec >= 1 (raw: first confirmed prediction writes)
+        # V7B wavy world: a prediction within +-WAVE_TOL of truth counts as
+        # correct for the gate -- the best possible prototype is band-correct
+        # (exact is impossible), so the gate must not demand exactness.
+        band_ok = (y is not None and C.WAVE_TOL > 0 and
+                   min((y - truth) % C.PUZ_P,
+                       (truth - y) % C.PUZ_P) <= C.WAVE_TOL)
+        if method == "fit" and (err == 0 or band_ok) and \
+                (n_ver >= 1 or C.WAVE_TOL > 0):
             d["consec"] += 1
-        elif method in ("book_test", "rule") and err == 0:
+        elif method in ("book_test", "rule", "epi_test") and \
+                (err == 0 or band_ok):
             d["consec"] += 1
         else:
             d["consec"] = 0
-        if (self.arm == "FULL" and d["consec"] >= C.PUZ_DISC_CONSEC
+        # verified milestone (V7): once consec reaches the gate, the episode's
+        # content counts as verified FOREVER -- a later failure must not
+        # un-verify an already-confirmed write
+        if d["consec"] >= C.PUZ_DISC_CONSEC:
+            d["verified"] = True
+        disc_gate = 1 if self.arm == "FULL-RAW" else C.PUZ_DISC_CONSEC
+        if (self.arm in ("FULL", "FULL-RAW") and d["consec"] >= disc_gate
                 and not d["done"] and ab):
             d["done"] = True
             a, b = ab

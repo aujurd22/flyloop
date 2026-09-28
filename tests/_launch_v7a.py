@@ -1,0 +1,31 @@
+import json
+import os
+import subprocess
+import sys
+import time
+
+sys.path.insert(0, r"D:\djr82\flyloop")
+from flyloop import config as C
+
+run_dir = os.path.join(C.ROOT, "runs", "v7a_" + time.strftime("%Y%m%d_%H%M"))
+os.makedirs(run_dir, exist_ok=True)
+with open(os.path.join(C.ROOT, "resume_config.json"), "w") as f:
+    json.dump({"run_dir": run_dir, "duration_h": 2.0}, f)
+print("resume hook ->", run_dir)
+
+launcher = (
+    "import os, sys\n"
+    "os.environ['FLYLOOP_NOISE_EPS']='0.25'\n"
+    "os.environ['FLYLOOP_ARMS']='FULL-RAW,MATCHED-VER'\n"
+    "os.environ['FLYLOOP_PREDSET']='V7A'\n"
+    "os.chdir(r'" + C.ROOT + "')\n"
+    "sys.argv = ['supervisor', '--run-dir', r'" + run_dir + "', "
+    "'--duration-h', '2']\n"
+    "from flyloop.supervisor import main\n"
+    "main()\n")
+lp = os.path.join(C.ROOT, "_v7a_launch.py")
+with open(lp, "w", encoding="utf-8") as f:
+    f.write(launcher)
+p = subprocess.Popen([C.PYTHON, lp], cwd=C.ROOT,
+                     creationflags=0x08000000, close_fds=True)
+print("supervisor pid", p.pid)
