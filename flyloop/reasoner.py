@@ -106,24 +106,47 @@ def book_test(cands, pairs, p: int):
     return None, 0, len(matches)
 
 
-def epi_test(cands, obs):
-    """MATCHED arm's matcher: the SAME unique-match decision rule as
-    book_test, but candidates are RAW episodic pair tables instead of
-    compressed rules. A candidate matches iff it maps EVERY live x to the
-    live y (an x absent from the candidate's table cannot be verified ->
-    no match — raw pairs do not generalize, that IS the representation
-    difference under test). Returns (candidate, rank, n_matches) where
-    candidate = (pairs, ep)."""
+def frac_best(cands, pairs, p: int, min_frac: float):
+    """Tolerant matcher (V6): score each candidate by the FRACTION of live
+    pairs it reproduces exactly; adopt the strict argmax when it clears
+    min_frac (recency order breaks ties -> a tie is no adoption). Under flip
+    noise the true rule reproduces ~0.75 of live pairs while wrong rules sit
+    near 1/p, so the fraction separates them where the all-pairs criterion
+    could not. Returns (candidate, rank, frac) or (None, 0, best_frac)."""
+    if not pairs:
+        return None, 0, 0.0
+    scored = []
+    for rank, cand in enumerate(cands, start=1):
+        a, b = cand[1], cand[2]
+        hit = sum(1 for x, y in pairs if (a * x + b) % p == y)
+        scored.append((hit / len(pairs), -rank, cand, rank))
+    scored.sort(reverse=True)
+    best_frac, _, best, best_rank = scored[0]
+    if best_frac < min_frac or len(scored) > 1 and scored[1][0] >= best_frac:
+        return None, 0, best_frac
+    return best, best_rank, best_frac
+
+
+def epi_test(cands, obs, min_frac: float = 1.0):
+    """MATCHED arm's matcher: the SAME decision rule as the book matcher, but
+    candidates are RAW episodic pair tables instead of compressed rules. A
+    candidate's score = fraction of live pairs it reproduces exactly (an x
+    absent from the candidate's table cannot be verified -> misses the
+    fraction). Strict argmax at min_frac; ties fall through. Raw pairs do
+    not generalize — that IS the representation difference under test.
+    Returns (candidate, rank, frac) where candidate = (pairs, ep)."""
     if not obs:
-        return None, 0, 0
-    matches = []
+        return None, 0, 0.0
+    scored = []
     for rank, (pairs, ep) in enumerate(cands, start=1):
         table = dict(pairs)
-        if all(x in table and table[x] == y for x, y in obs):
-            matches.append(((pairs, ep), rank))
-    if len(matches) == 1:
-        return matches[0][0], matches[0][1], 1
-    return None, 0, len(matches)
+        hit = sum(1 for x, y in obs if x in table and table[x] == y)
+        scored.append((hit / len(obs), -rank, (pairs, ep), rank))
+    scored.sort(reverse=True)
+    best_frac, _, best, best_rank = scored[0]
+    if best_frac < min_frac or len(scored) > 1 and scored[1][0] >= best_frac:
+        return None, 0, best_frac
+    return best, best_rank, best_frac
 
 
 def fit_from(pairs, p: int):
@@ -223,10 +246,12 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
     revealed pair is already in `obs` — applies to ALL arms symmetrically).
 
     1. (F) book rule already active at this epoch -> "rule"
-    2. (F) book candidates tested against obs: unique match -> "book_test"
-       (M) episodic candidates: unique raw-table match -> "epi_test", then
-           fit from the matched table's pairs + obs (raw pairs need >= 2
-           distinct x to answer a new xp)
+    2. (F) book candidates vs obs — V6 composite: exact unique match first
+           (the probe-1 shortcut survives unflipped pairs), then fraction-best
+           at MATCH_MIN_FRAC when the exact path is ambiguous (the noise
+           antidote; meaningful from >= 2 live pairs)
+       (M) episodic candidates: same composite over raw pair tables ->
+           "epi_test", then fit from the matched table's pairs + obs
     3. live fit from >= 2 distinct obs (all arms)
     4. (E/M) stale fit from the freshest recalled table
     5. guess / cold
@@ -243,15 +268,33 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
         test_cands = [r for r in cands if r[3] != epoch][:C.BOOK_TEST_K]
         if obs:
             rule, rank, n_m = book_test(test_cands, obs, p)
+            if rule is None and C.MATCH_MIN_FRAC < 1.0 and len(obs) >= 2:
+                # V6 tolerant fallback: the true rule reproduces ~0.75 of
+                # flip-noisy live pairs while wrong rules sit near 1/p
+                rule, rank, frac = frac_best(test_cands, obs, p, C.MATCH_MIN_FRAC)
+                if rule is not None:
+                    rid, a, b, _ = rule
+                    return ((a * xp + b) % p, "book_test", 1, (a, b),
+                            {"rule_id": rid, "book_rank": rank,
+                             "match_frac": round(frac, 3)})
             if rule is not None:
                 rid, a, b, _ = rule
                 return ((a * xp + b) % p, "book_test", 1, (a, b),
                         {"rule_id": rid, "book_rank": rank,
                          "n_book_matches": n_m})
     if epi_cands and obs:
-        cand, rank, n_m = epi_test(
-            [(pairs, ep) for pairs, ep in epi_cands if ep != epoch][:C.EPIREG_CAP],
-            obs)
+        epi_pool = [(pairs, ep) for pairs, ep in epi_cands if ep != epoch][
+            :C.EPIREG_CAP]
+        cand, rank, n_m = epi_test(epi_pool, obs)
+        if cand is None and C.MATCH_MIN_FRAC < 1.0 and len(obs) >= 2:
+            cand, rank, frac = epi_test(epi_pool, obs, min_frac=C.MATCH_MIN_FRAC)
+            if cand is not None:
+                cpairs, cep = cand
+                ab = fit_from(list(cpairs) + obs, p)
+                if ab is not None:
+                    a, b = ab
+                    return ((a * xp + b) % p, "epi_test", 1, (a, b),
+                            {"epi_rank": rank, "match_frac": round(frac, 3)})
         if cand is not None:
             cpairs, cep = cand
             ab = fit_from(list(cpairs) + obs, p)
