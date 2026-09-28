@@ -267,12 +267,17 @@ def puz_rotation_cycle(fam: int, epoch: int) -> int:
 
 
 def puz_probe(fam: int, cycle: int):
-    """One revealed example pair + a probe x whose y is hidden until scored."""
+    """One revealed example pair + a probe x whose y is hidden until scored.
+    V5: the revealed y1 is corrupted with probability NOISE_EPS (measurement
+    noise — truth stays exact; the flip is a pure function of the same keys,
+    so all arms see identical observations)."""
     r = _rng("puz", "probe", fam, cycle)
     a, b = puz_rule(fam, cycle)
     x1 = int(r.integers(0, C.PUZ_P))
     xp = int(r.integers(0, C.PUZ_P))
     y1 = (a * x1 + b) % C.PUZ_P
+    if C.NOISE_EPS > 0 and float(r.random()) < C.NOISE_EPS:
+        y1 = (y1 + int(r.integers(1, C.PUZ_P))) % C.PUZ_P
     truth = (a * xp + b) % C.PUZ_P
     return (x1, y1), xp, truth
 

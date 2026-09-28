@@ -129,6 +129,11 @@ BOOK_TEST_K = 5              # recency window of book candidates tested per prob
 PUZ_PROBE_CADENCE = 8
 EPISODE_PROBE_LENS = [4, 6, 10, 20, 40]
 EPISODE_PROBE_WEIGHTS = [0.15, 0.15, 0.25, 0.25, 0.20]
+# V5 observation noise: the REVEALED pair's y1 flips to a different value with
+# probability NOISE_EPS (truth untouched — measurement noise, not drift). Pure
+# function of (fam, cycle, seed), identical across arms. Run A (V4) is the
+# eps=0 baseline; see V5_DESIGN.md.
+NOISE_EPS = float(os.environ.get("FLYLOOP_NOISE_EPS", "0"))
 # horizon/mix arithmetic (do not eyeball): mean length 17 probes = 136 cycles
 # -> ~310 episodes/family in 42k cycles -> NEW ~155/family, just inside the
 # 156 distinct (a,b) pairs per family; the 200-draw NEW fallback covers the
