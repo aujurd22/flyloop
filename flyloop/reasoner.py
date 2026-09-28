@@ -108,11 +108,14 @@ def book_test(cands, pairs, p: int):
 
 def frac_best(cands, pairs, p: int, min_frac: float):
     """Tolerant matcher (V6): score each candidate by the FRACTION of live
-    pairs it reproduces exactly; adopt the strict argmax when it clears
-    min_frac (recency order breaks ties -> a tie is no adoption). Under flip
-    noise the true rule reproduces ~0.75 of live pairs while wrong rules sit
-    near 1/p, so the fraction separates them where the all-pairs criterion
-    could not. Returns (candidate, rank, frac) or (None, 0, best_frac)."""
+    pairs it reproduces exactly; adopt ONLY a strict argmax that clears
+    min_frac — a tie at the top is a REFUSAL, not a recency tiebreak
+    (ambiguous identification is refused, consistent with the exact
+    matcher's unique-match discipline; reviewer option A, 2026-09-28).
+    Under flip noise the true rule reproduces ~0.75 of live pairs while
+    wrong rules sit near 1/p, so the fraction separates them where the
+    all-pairs criterion could not. Returns (candidate, rank, frac) or
+    (None, 0, best_frac)."""
     if not pairs:
         return None, 0, 0.0
     scored = []
@@ -132,9 +135,10 @@ def epi_test(cands, obs, min_frac: float = 1.0):
     candidates are RAW episodic pair tables instead of compressed rules. A
     candidate's score = fraction of live pairs it reproduces exactly (an x
     absent from the candidate's table cannot be verified -> misses the
-    fraction). Strict argmax at min_frac; ties fall through. Raw pairs do
-    not generalize — that IS the representation difference under test.
-    Returns (candidate, rank, frac) where candidate = (pairs, ep)."""
+    fraction). ONLY a strict argmax at min_frac adopts — a tie at the top is
+    a refusal, not a recency tiebreak (same discipline as frac_best). Raw
+    pairs do not generalize — that IS the representation difference under
+    test. Returns (candidate, rank, frac) where candidate = (pairs, ep)."""
     if not obs:
         return None, 0, 0.0
     scored = []
