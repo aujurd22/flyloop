@@ -147,7 +147,7 @@ def useful_insight(arms, n_perm=1000, seed=11):
     pool = [k for k in F if F[k]["type"] == "RECALL"]
     null = []
     for _ in range(n_perm):
-        draw = [rng.choice(pool) for _ in range(len(all_rec))]
+        draw = [pool[i] for i in rng.integers(0, len(pool), size=len(all_rec))]
         null.append(float(np.mean([benefit(rules[i], [draw[i]])
                                    for i in range(len(rules))])))
     return uir, float(np.percentile(null, 95))
