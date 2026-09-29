@@ -144,6 +144,8 @@ class CycleRunner:
         self.book = {}   # {fam: {rid: {"a","b","ep"}}}  (mirror of the RULEBOOK entry)
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
+        self.flip_hist = deque(maxlen=20)  # V8 adaptive: rolling book_test outcomes
+        self.adapt = {"eps_hat": 0.0}  # V8 adaptive read policy estimate
         self.counts = {"writes": 0, "recalls": 0, "noise": 0, "discoveries": 0,
                        "fact_writes": 0, "pair_writes": 0, "book_writes": 0,
                        "book_bytes": 0, "epireg_writes": 0, "epireg_bytes": 0,
@@ -339,7 +341,7 @@ class CycleRunner:
         entries = parse_recall(block_t)
         cands = None
         epi_cands = None
-        if self.arm in ("FULL", "FULL-RAW"):
+        if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT"):
             # RSI-0 G2 perrule mode: exact state_lookup over the runner's own
             # rule index (RAM mirror), same pattern as the MATCHED archive
             cands = []
@@ -389,10 +391,21 @@ class CycleRunner:
                     epi.append((pairs, ep_old))
             epi.sort(key=lambda t: -t[1])
             epi_cands = epi
+        # V8 adaptive read policy (FULL-ADAPT arm): the effective match bar
+        # ADAPTS to the measured reveal-flip rate, estimated from the rolling
+        # book_test success rate over the last 20 probes. At eps=0 the best
+        # rule reproduces ~every live pair (bar stays at BASE); under flips
+        # the success rate drops and the bar lowers proportionally, keeping
+        # true rules recoverable while strict-argmax still refuses garbage.
+        adj_min_frac = C.MATCH_MIN_FRAC
+        if self.arm == "FULL-ADAPT" and len(self.flip_hist) >= 5:
+            flip_rate = sum(self.flip_hist) / len(self.flip_hist)
+            adj_min_frac = max(0.50, C.MATCH_MIN_FRAC * (1.0 - flip_rate))
         y, method, n_ver, ab, aux = reasoner.predict_puzzle_v4(
-            entries, fam, epoch, xp, obs, cands=cands, epi_cands=epi_cands)
+            entries, fam, epoch, xp, obs, cands=cands, epi_cands=epi_cands,
+            min_frac=adj_min_frac)
 
-        stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW") else \
+        stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT") else \
             any(int(m.group(5)) != epoch for m in
                 [reasoner.P_PAIRS.search(t) for _, t in entries]
                 if m and int(m.group(2)) == fam)
@@ -412,6 +425,8 @@ class CycleRunner:
         self.counts["puz_probes"] += 1
         if method == "book_test":
             self.counts["book_test_uses"] += 1
+            # V8 adaptive: track the rolling book_test outcome for flip estimation
+            self.flip_hist.append(1 - err if method == "book_test" else 0)
         if method == "epi_test":
             self.counts["epi_test_uses"] += 1
         if stale_intrusion:
@@ -503,7 +518,7 @@ class CycleRunner:
         if d["consec"] >= C.PUZ_DISC_CONSEC:
             d["verified"] = True
         disc_gate = 1 if self.arm == "FULL-RAW" else C.PUZ_DISC_CONSEC
-        if (self.arm in ("FULL", "FULL-RAW") and d["consec"] >= disc_gate
+        if (self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT") and d["consec"] >= disc_gate
                 and not d["done"] and ab):
             d["done"] = True
             a, b = ab
