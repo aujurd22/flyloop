@@ -12,7 +12,10 @@ never read it back, collapsing into identical fit-only arms, E20 identical
 to the digit 4.759 = 4.759). The bug itself provided an unintended control:
 write policy with no memory reads has zero behavioral effect.
 
-## The clean within-tolerant-matcher factorial (ε=0.25)
+## The factorial (ε=0.25; all four cells ran the SAME exact matcher --
+MATCH_MIN_FRAC was 1.0 in the V7A launcher and V5B predates tolerance; a
+post-review pass corrected an earlier draft that mislabeled one comparison
+as "within-tolerant" by pairing V7A cells with V6T's different-matcher run)
 
 | cell | E20 (RECALL, discovered+all) |
 |---|---|
@@ -24,8 +27,8 @@ write policy with no memory reads has zero behavioral effect.
 | factor | effect | reading |
 |---|---|---|
 | support (sparse − full) | **+2.2-2.3** | dominant, robust to write policy |
-| write depth at full support (shallow − deep) | +0.45 (se 0.31, n.s.) | deep mildly better |
-| archive gate at sparse support (verified − cadence) | −0.03 | neutral |
+| write depth at full support (shallow − deep) | +0.45 (se 0.31, n.s.); same-matcher contrast CI [−2.29, +0.31] | sign unconclusive at this n |
+| archive gate at sparse support (verified − cadence) | −0.03 | neutral; same-matcher support contrasts: dS_raw +2.14 CI[+0.82, +3.44] SIGNIFICANT, dS_ver +1.00 CI[−0.26, +2.26] n.s. |
 
 ## Verdicts
 

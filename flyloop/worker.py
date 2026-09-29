@@ -154,6 +154,19 @@ class Worker:
                   "with V5B; adjudication experiments/compare_v7.py")
             log("[ledger] pre-registered 5 v7 Phase A predictions")
             return
+        if PREDSET == "RSI0":
+            # RSI-0 G1 (RSI0_DESIGN.md §5): parent g0 + M1 (BOOK_CAP 5 -> 13).
+            r("RSI0-G1-P01 (accept M1 iff): FULL E20 on discovered-recurrence "
+              "RECALL episodes < 2.347 (g0 point) with cluster-bootstrap CI "
+              "wholly below it", cmax, "run",
+              "parent = v6t_20260928_2159; evaluator identical")
+            r("RSI0-G1-P02 (mechanism): the no-candidate share of probe-1 "
+              "failures shrinks vs g0's 15/31 (the floor M1 targets)",
+              cmax, "run", "")
+            r("RSI0-G1-P03 (no-harm): probe-1 recovery stays >= g0's 38.8%",
+              cmax, "run", "")
+            log("[ledger] pre-registered 3 RSI0-G1 predictions")
+            return
         r("V4-P01 (primary, the V3-P06 fix): recurrences of DISCOVERED rules "
           "show a larger F-vs-E benefit than recurrences of UNDISCOVERED "
           "rules; cluster-bootstrap CI of the contrast excludes 0",
