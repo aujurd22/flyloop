@@ -103,6 +103,7 @@ class Worker:
         self.cycle = 0
         self.fails = 0
         self.run_status = "OK"
+        self._divergence_checked = False
 
     # ------------------------------------------------------------------
     def _load_state(self):
@@ -222,6 +223,29 @@ class Worker:
           "(phase-C err <= 2x phase-A err and <= 0.20 absolute)",
           cmax, "run", "")
         log("[ledger] pre-registered 8 v4 predictions")
+
+    # ------------------------------------------------------------------
+    def _check_divergence(self, recs):
+        """Early-run alarm (V7A lesson): two non-EPISODIC memory arms whose
+        (method, error) sequences are IDENTICAL past ~600 cycles means one
+        arm has lost its memory-read path -- say so LOUDLY at 10 min instead
+        of burning 2 h."""
+        if self._divergence_checked or self.cycle < 600:
+            return
+        sig = {}
+        for r in recs:
+            if r.get("lane") == "puzzle" and r.get("memory_arm") != "EPISODIC":
+                sig.setdefault(r["memory_arm"], []).append(
+                    (r.get("method"), r.get("error")))
+        names = sorted(sig)
+        if len(names) >= 2 and len(sig[names[0]]) >= 400:
+            same = all(sig[a] == sig[names[0]] for a in names)
+            if same:
+                self.run_status = "ENGINEERING_INVALID:arm-divergence-failure"
+                log("[PREFLIGHT-ALARM] arms produced IDENTICAL method+error "
+                    f"sequences over {len(sig[names[0]])} probes -- a memory "
+                    "read path is dead (V7A fingerprint). Marking run invalid.")
+        self._divergence_checked = True
 
     # ------------------------------------------------------------------
     def _quota_state(self, runF, detF):
@@ -370,6 +394,8 @@ class Worker:
                     if rec.get("lane") == "puzzle":
                         met.add(c, "puzzle", rec.get("error"))
                     dets[arm].on_cycle(c, rec)
+                if c == 600:
+                    self._check_divergence(list(recs.values()))
                 dt = (time.perf_counter() - t0) * 1000
                 if dt < C.SPEED_PACING_MS * len(ARMS):
                     await asyncio.sleep((C.SPEED_PACING_MS * len(ARMS) - dt) / 1000.0)
