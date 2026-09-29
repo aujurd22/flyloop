@@ -33,13 +33,16 @@ from .cycle import CycleRunner, PadSync
 
 ARMS = tuple(os.environ.get(
     "FLYLOOP_ARMS", "FULL,MATCHED,EPISODIC").split(","))
-# V7 factorial runs swap arms via env (e.g. "FULL-RAW,MATCHED-VER"); the two
-# new arms reuse the FULL/MATCHED service instances (fresh per-run DBs, so no
-# cross-run contamination).
-MEM_URLS = {
-    "FULL": C.MEM_URL, "MATCHED": C.MEM_URL_MATCHED, "EPISODIC": C.MEM_URL_EPI,
-    "FULL-RAW": C.MEM_URL, "MATCHED-VER": C.MEM_URL_EPI,
-}
+# V7 factorial runs swap arms via env (e.g. "FULL-RAW,MATCHED-VER"); every
+# arm gets its OWN service instance — two arms on one store cross-contaminate
+# (V7C lesson: FULL and FULL-RAW sharing a store I1-superseded each other's
+# book entries, zeroing the write-depth contrast). Ports come as a comma
+# list aligned with ARMS order.
+_PORTS = os.environ.get(
+    "FLYLOOP_PORTS", ",".join(str(p) for p in (C.MEM_PORT, C.MEM_PORT_MATCHED,
+                                               C.MEM_PORT_EPI)))
+MEM_URLS = {arm: f"http://{C.MEM_HOST}:{port}/mcp"
+            for arm, port in zip(ARMS, _PORTS.split(","))}
 PREDSET = os.environ.get("FLYLOOP_PREDSET", "V4")
 
 

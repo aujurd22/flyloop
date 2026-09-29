@@ -344,8 +344,14 @@ class CycleRunner:
             # rule index (RAM mirror), same pattern as the MATCHED archive
             cands = []
             if C.BOOK_MODE == "perrule":
+                # guard BEFORE sorting: drop index keys whose mirror entry was
+                # evicted (desync otherwise KeyErrors the sort key itself)
+                live = [r for r in self.book_index.get(fam, set())
+                        if r in self.book.get(fam, {})]
+                for stale_rid in self.book_index.get(fam, set()) - set(live):
+                    self.book_index[fam].discard(stale_rid)
                 for rid_old in sorted(
-                        self.book_index.get(fam, set()),
+                        live,
                         key=lambda r: -self.book[fam][r]["ep"])[:C.BOOK_CAP]:
                     if self.book[fam][rid_old]["ep"] == epoch:
                         continue
@@ -506,11 +512,14 @@ class CycleRunner:
             prev = fam_book.get(rid)
             is_reactivation = prev is not None and (prev["a"], prev["b"]) == (a, b)
             fam_book[rid] = {"a": a, "b": b, "ep": epoch}
-            # cap: keep only the BOOK_CAP most recent rules of this family
+            # cap: keep only the BOOK_CAP most recent rules of this family;
+            # prune the G2 perrule index in LOCKSTEP (a stale index entry
+            # crashes the read path with KeyError -- V7A-first-launch lesson)
             if len(fam_book) > C.BOOK_CAP:
                 for old_rid in sorted(fam_book, key=lambda r: fam_book[r]["ep"])[
                         :len(fam_book) - C.BOOK_CAP]:
                     del fam_book[old_rid]
+                    self.book_index.get(fam, set()).discard(old_rid)
             if C.BOOK_MODE == "perrule":
                 # RSI-0 G2: one SHORT entry per rule (~45 chars) — immune to
                 # the >120-char split_chunks/atomicity trap that rejected
