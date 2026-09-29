@@ -19,23 +19,27 @@ as "within-tolerant" by pairing V7A cells with V6T's different-matcher run)
 
 | cell | E20 (RECALL, discovered+all) |
 |---|---|
-| FULL, deep write (consec-3, V6T) | 2.347 |
+| FULL, deep write (consec-3, V5B) | 3.621 |
 | FULL-RAW, shallow write (consec-1, V7A) | 2.633 |
 | MATCHED-VER, verified-gated archive (V7A) | 4.620 |
-| MATCHED, cadence archive (V5B) | 4.653 |
+| MATCHED, cadence archive (V5B) | 4.776 |
 
 | factor | effect | reading |
 |---|---|---|
-| support (sparse − full) | **+2.2-2.3** | dominant, robust to write policy |
-| write depth at full support (shallow − deep) | +0.45 (se 0.31, n.s.); same-matcher contrast CI [−2.29, +0.31] | sign unconclusive at this n |
-| archive gate at sparse support (verified − cadence) | −0.03 | neutral; same-matcher support contrasts: dS_raw +2.14 CI[+0.82, +3.44] SIGNIFICANT, dS_ver +1.00 CI[−0.26, +2.26] n.s. |
+| support at raw write (sparse − full) | **+2.14** CI[+0.82, +3.44] | the only SIGNIFICANT contrast |
+| support at verified write (sparse − full) | +1.00 CI[−0.26, +2.26] n.s. | same direction, n.s. |
+| write depth at full support (shallow − deep) | −0.99 CI[−2.29, +0.31] n.s. | sign unconclusive at this n |
+| archive gate at sparse support (verified − cadence) | −0.16 | neutral |
 
 ## Verdicts
 
-- **V7-P01 REFUTED (as registered) — and the refutation is the result**: the
-  dominance comparison as worded was confounded (cells differed in matcher
-  regime too). The clean factorial says **support size dominates the
-  write-verification factor ~5:1** (2.2-2.3 vs 0.45 n.s.).
+- **V7-P01 REFUTED (as registered)**: the dominance comparison as worded
+  (|F−F-RAW| < |M−M-VER| = 0.99 < 0.16) is false. The honest factorial
+  statement: the only SIGNIFICANT contrast is the support effect at raw
+  write (+2.14 CI[+0.82, +3.44]); the write-depth effect's sign is
+  unconclusive at this n (CI crosses 0), and a post-review pass corrected
+  an earlier draft's mislabeled "within-tolerant" comparison (V7A cells had
+  been paired with V6T's different-matcher run) and its "~5:1" ratio.
 - V7-P02 PARTIAL: verified-gated archiving at sparse support ≈ neutral
   (−0.03 within tolerant).
 - V7-P03 CONFIRMED: epi_test 44→60, book_test 151→174 — both paths live.
@@ -48,15 +52,17 @@ as "within-tolerant" by pairing V7A cells with V6T's different-matcher run)
 
 V5's "write-time verification is the noise filter" survives in weakened,
 precise form: deep verification is mildly better than shallow at full
-support (+0.29-0.45, n.s. at this n) — but it is NOT the dominant term.
-**Coverage/generalization is.** The three-run arc (V5 exact / V6 tolerant /
-V7 factorial) converges on:
+support (−0.45, n.s. at this n) — but it is NOT the dominant term.
+**Coverage/generalization is** — and the earlier draft's "~5:1" ratio is
+withdrawn: the support effect is the only significant contrast (+2.14 at
+raw write), while the write-depth effect's sign is itself unconclusive
+(−0.99, CI crosses 0). The V4→V7A arc converges on:
 
 > Under measurement noise, the recurrence advantage of rule memory over
 > instance memory is driven primarily by full-input-space coverage of the
-> abstraction; write-time verification is a secondary term with a
-> quantified availability (probe-1 +12pp) / poisoning (intrusions ×2.8)
-> trade-off.
+> abstraction; write-time verification is a secondary term whose sign is
+> not yet resolvable at n≈50-79, with a quantified availability (probe-1
+> +12pp) / poisoning (intrusions ×2.8) trade-off.
 
 ## Registered next steps
 
