@@ -92,6 +92,17 @@ def book_state_key(fam):
     return C.BOOK_STATE_KEY.format(fam=fam)
 
 
+def book_rule_text(fam, rid, r, c):
+    """RSI-0 G2 per-rule entry: one rule, ~45 chars — immune to the
+    >120-char split_chunks/atomicity trap that killed G1's 13-rule entry."""
+    return (f"{BOOK_TAG} {FAM_TAGS[fam]}规律 c={c} :: "
+            f"{FAM_TAGS[fam]}r{rid.split('r')[1]}={r['a']}x{r['b']}e{r['ep']}")
+
+
+def book_rule_key(fam, rid):
+    return f"flyloop/book/{fam}/{rid}"
+
+
 def epireg_text(fam, ep, c, pairs_str):
     """MATCHED arm's episodic archive entry: the episode's raw pair table,
     one entry per episode (unique state_key -> no in-place overwrites).
@@ -132,6 +143,7 @@ class CycleRunner:
         self.disc = {}
         self.book = {}   # {fam: {rid: {"a","b","ep"}}}  (mirror of the RULEBOOK entry)
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
+        self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
         self.counts = {"writes": 0, "recalls": 0, "noise": 0, "discoveries": 0,
                        "fact_writes": 0, "pair_writes": 0, "book_writes": 0,
                        "book_bytes": 0, "epireg_writes": 0, "epireg_bytes": 0,
@@ -328,10 +340,31 @@ class CycleRunner:
         cands = None
         epi_cands = None
         if self.arm in ("FULL", "FULL-RAW"):
-            block_b, _ = await self.mem.state_lookup(book_state_key(fam))
-            self.counts["recalls"] += 1
-            registry = reasoner.parse_book_v3(block_b, fam)
-            cands = reasoner.book_candidates(registry, C.BOOK_CAP)
+            # RSI-0 G2 perrule mode: exact state_lookup over the runner's own
+            # rule index (RAM mirror), same pattern as the MATCHED archive
+            cands = []
+            if C.BOOK_MODE == "perrule":
+                for rid_old in sorted(
+                        self.book_index.get(fam, set()),
+                        key=lambda r: -self.book[fam][r]["ep"])[:C.BOOK_CAP]:
+                    if self.book[fam][rid_old]["ep"] == epoch:
+                        continue
+                    try:
+                        blk, _ = await self.mem.state_lookup(
+                            book_rule_key(fam, rid_old))
+                    except Exception:
+                        continue
+                    got = reasoner.parse_book_v3(blk or "", fam)
+                    for rr in got:
+                        if rr[0] == rid_old:
+                            cands.append(rr)
+                            break
+                cands.sort(key=lambda r: -r[3])
+            else:
+                block_b, _ = await self.mem.state_lookup(book_state_key(fam))
+                self.counts["recalls"] += 1
+                registry = reasoner.parse_book_v3(block_b, fam)
+                cands = reasoner.book_candidates(registry, C.BOOK_CAP)
         elif self.arm in ("MATCHED", "MATCHED-VER"):
             # exact state_lookup over the runner's own archive index (RAM
             # mirror of written keys) — similarity-based recall would rank
@@ -478,11 +511,27 @@ class CycleRunner:
                 for old_rid in sorted(fam_book, key=lambda r: fam_book[r]["ep"])[
                         :len(fam_book) - C.BOOK_CAP]:
                     del fam_book[old_rid]
-            text = book_text_v3(fam, self.book, c)
+            if C.BOOK_MODE == "perrule":
+                # RSI-0 G2: one SHORT entry per rule (~45 chars) — immune to
+                # the >120-char split_chunks/atomicity trap that rejected
+                # G1's 13-rule single entry. force_new is LOAD-BEARING here:
+                # same-family perrule entries share the head and measure
+                # >0.92 similar, so without it the merge zone rewrites the
+                # previous rule's entry in place and the book degenerates to
+                # one entry per family (the V1 table-swallows-rule failure
+                # mode, perrule edition — found live in rsi0_g2 first launch)
+                text = book_rule_text(fam, rid, fam_book[rid], c)
+                skey = book_rule_key(fam, rid)
+                force_new = True
+            else:
+                text = book_text_v3(fam, self.book, c)
+                skey = book_state_key(fam)
+                force_new = False
             resp, _ = await self._remember(
                 text, tags="flyloop,insight,rule",
-                compartment=C.COMPARTMENT_RULE, state_key=book_state_key(fam),
-                state_value=f"n{len(fam_book)}")
+                compartment=C.COMPARTMENT_RULE, state_key=skey,
+                state_value=f"n{len(fam_book)}", force_new=force_new)
+            self.book_index.setdefault(fam, set()).add(rid)
             self.counts["book_writes"] += 1
             nbytes = len(text.encode("utf-8"))
             self.counts["book_bytes"] += nbytes
@@ -490,9 +539,14 @@ class CycleRunner:
                 self.pad_sync.charge("FULL", nbytes)
             # read-back: this family's rules must be visible in its book entry
             try:
-                rb, _ = await self.mem.state_lookup(book_state_key(fam))
-                got = reasoner.parse_book_v3(rb, fam)
-                ok = any(r[0] == rid and (r[1], r[2]) == (a, b) for r in got)
+                if C.BOOK_MODE == "perrule":
+                    rb, _ = await self.mem.state_lookup(book_rule_key(fam, rid))
+                    got = reasoner.parse_book_v3(rb, fam)
+                    ok = any(r[0] == rid and (r[1], r[2]) == (a, b) for r in got)
+                else:
+                    rb, _ = await self.mem.state_lookup(book_state_key(fam))
+                    got = reasoner.parse_book_v3(rb, fam)
+                    ok = any(r[0] == rid and (r[1], r[2]) == (a, b) for r in got)
             except Exception:
                 ok = False
             if not ok:
@@ -519,6 +573,7 @@ class CycleRunner:
                 "counts": self.counts,
                 "book": {str(k): v for k, v in self.book.items()},
                 "epi_index": {str(k): v for k, v in self.epi_index.items()},
+                "book_index": {str(k): sorted(v) for k, v in self.book_index.items()},
                 "arm": self.arm, "pad_seq": self.pad_seq}
 
     def load_dict(self, d):
@@ -526,4 +581,5 @@ class CycleRunner:
         self.counts = d.get("counts", self.counts)
         self.book = {int(k): v for k, v in (d.get("book") or {}).items()}
         self.epi_index = {int(k): v for k, v in (d.get("epi_index") or {}).items()}
+        self.book_index = {int(k): set(v) for k, v in (d.get("book_index") or {}).items()}
         self.pad_seq = d.get("pad_seq", 0)

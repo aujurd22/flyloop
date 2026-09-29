@@ -229,6 +229,10 @@ PAD_HEAD = "PADLOG"
 # loses no recurrence coverage.
 BOOK_STATE_KEY = "flyloop/book/f{fam}"
 BOOK_CAP = int(os.environ.get("FLYLOOP_BOOK_CAP", "5"))  # recent rules kept per family (gaps are 2-5); RSI-0 M1 mutates this
+# RSI-0 G2: per-rule book encoding — one SHORT state entry per rule (~40
+# chars, immune to the 120-char split_chunks/atomicity trap), indexed by a
+# RAM mirror of rule ids. "single" = V4-V7 behavior (one entry per family).
+BOOK_MODE = os.environ.get("FLYLOOP_BOOK_MODE", "single")
 # v4 MATCHED arm: episodic pair-table archive, one entry per episode (unique
 # state_key per episode -> no in-place overwrites -> history survives), same
 # cap depth as the book. The archive entry text reuses the table payload

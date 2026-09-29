@@ -167,6 +167,30 @@ class Worker:
               cmax, "run", "")
             log("[ledger] pre-registered 3 RSI0-G1 predictions")
             return
+        if PREDSET == "RSI0G2":
+            # RSI-0 G2 (feasible re-encoding of M1): per-rule entries at
+            # cap 13, tolerant 0.6, eps 0.25. Parent = g0 (2.347).
+            r("RSI0-G2-P01 (accept iff): FULL E20 on discovered-recurrence "
+              "RECALL episodes < 2.347 (g0 point) with cluster-bootstrap CI "
+              "wholly below it — per-rule encoding rescues M1's intent",
+              cmax, "run", "parent = v6t_20260928_2159")
+            r("RSI0-G2-P02 (mechanism): rulebook_readback_fail stays < 5% of "
+              "book_writes (G1's failure mode: 69% dead writes)",
+              cmax, "run", "")
+            r("RSI0-G2-P03 (coverage): probe-1 book_test hits >= 38.8% "
+              "(g0 level) — the no-candidate floor M1 targeted shrinks",
+              cmax, "run", "")
+            log("[ledger] pre-registered 3 RSI0-G2 predictions")
+            return
+        if PREDSET == "V7C":
+            # V7C: write-depth sign n-extension at the exact matcher
+            # (V7A cells: dW=-0.99 CI[-2.29,+0.31], sign unresolved)
+            r("V7C-P01: the write-depth sign resolves — dE20(F-RAW - F) on "
+              "RECALL episodes with cluster-bootstrap CI excluding 0 "
+              "(pooled post-hoc with V7A cells, same schedule/seed)",
+              cmax, "run", "band: resolvable iff CI width < 1.5")
+            log("[ledger] pre-registered 1 v7C prediction")
+            return
         r("V4-P01 (primary, the V3-P06 fix): recurrences of DISCOVERED rules "
           "show a larger F-vs-E benefit than recurrences of UNDISCOVERED "
           "rules; cluster-bootstrap CI of the contrast excludes 0",
