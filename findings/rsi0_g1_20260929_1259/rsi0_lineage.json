@@ -1,0 +1,53 @@
+{
+ "objective": "minimize FULL E20 on discovered-rule RECALL episodes; SIR floor >= 20 counts; menu mutations only",
+ "generations": [
+  {
+   "gen": -2,
+   "run": "v4_20260928_1636",
+   "config": {
+    "MATCH_MIN_FRAC": 1.0,
+    "BOOK_CAP": 5,
+    "NOISE_EPS": 0.0
+   },
+   "FULL_E20": 0.431,
+   "note": "eps=0 control"
+  },
+  {
+   "gen": -1,
+   "run": "v5b_20260928_1848",
+   "config": {
+    "MATCH_MIN_FRAC": 1.0,
+    "BOOK_CAP": 5,
+    "NOISE_EPS": 0.25
+   },
+   "FULL_E20": 3.621,
+   "note": "noise baseline"
+  },
+  {
+   "gen": 0,
+   "run": "v6t_20260928_2159",
+   "config": {
+    "MATCH_MIN_FRAC": 0.6,
+    "BOOK_CAP": 5,
+    "NOISE_EPS": 0.25
+   },
+   "FULL_E20": 2.347,
+   "note": "M2 exercised: tolerance accepted (-1.27); matcher-artifact hypothesis refuted in V6"
+  },
+  {
+   "gen": 1,
+   "run": "rsi0_g1_20260929_1259",
+   "config": {
+    "MATCH_MIN_FRAC": 0.6,
+    "BOOK_CAP": 13,
+    "NOISE_EPS": 0.25
+   },
+   "FULL_E20": 4.078,
+   "verdict": "REJECTED (revert to g0)",
+   "note": "M1 naive form infeasible: >120-char entries rejected by state_key atomicity guard; book froze; feasible variant = per-rule entry encoding or different storage format (G2 candidate, requires design)"
+  }
+ ],
+ "struck_mutations": [
+  "M1 (naive cap raise; feasible re-encoding = G2 candidate)"
+ ]
+}
