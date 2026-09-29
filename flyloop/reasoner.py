@@ -258,9 +258,10 @@ def predict_puzzle(entries, fam: int, epoch: int, xp: int):
 
 
 def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
-                      cands=None, epi_cands=None):
+                      cands=None, epi_cands=None, min_frac=None):
     """V4 hierarchy over PRE-FOLDED live observations (the current probe's
     revealed pair is already in `obs` — applies to ALL arms symmetrically).
+    min_frac overrides C.MATCH_MIN_FRAC when set (V8 adaptive read policy).
 
     1. (F) book rule already active at this epoch -> "rule"
     2. (F) book candidates vs obs — V6 composite: exact unique match first
@@ -285,12 +286,13 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
         test_cands = [r for r in cands if r[3] != epoch][:C.BOOK_TEST_K]
         if obs:
             rule, rank, n_m = book_test(test_cands, obs, p)
-            if rule is None and C.MATCH_MIN_FRAC < 1.0 and len(obs) >= 2:
+            eff_mf = min_frac if min_frac is not None else C.MATCH_MIN_FRAC
+            if rule is None and eff_mf < 1.0 and len(obs) >= 2:
                 # V6 tolerant fallback: the true rule reproduces ~0.75 of
                 # flip-noisy live pairs while wrong rules sit near 1/p;
                 # V7B: tol=WAVE_TOL lets the prototype sit within the wave
                 # band of the live pairs
-                rule, rank, frac = frac_best(test_cands, obs, p, C.MATCH_MIN_FRAC,
+                rule, rank, frac = frac_best(test_cands, obs, p, eff_mf,
                                              tol=C.WAVE_TOL)
                 if rule is not None:
                     rid, a, b, _ = rule
@@ -306,8 +308,9 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
         epi_pool = [(pairs, ep) for pairs, ep in epi_cands if ep != epoch][
             :C.EPIREG_CAP]
         cand, rank, n_m = epi_test(epi_pool, obs, tol=C.WAVE_TOL)
-        if cand is None and C.MATCH_MIN_FRAC < 1.0 and len(obs) >= 2:
-            cand, rank, frac = epi_test(epi_pool, obs, min_frac=C.MATCH_MIN_FRAC,
+        eff_mf = min_frac if min_frac is not None else C.MATCH_MIN_FRAC
+        if cand is None and eff_mf < 1.0 and len(obs) >= 2:
+            cand, rank, frac = epi_test(epi_pool, obs, min_frac=eff_mf,
                                         tol=C.WAVE_TOL)
             if cand is not None:
                 cpairs, cep = cand
