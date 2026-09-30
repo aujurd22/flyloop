@@ -25,8 +25,9 @@ sys.path.insert(0, ROOT)
 
 from flyloop import config as C  # noqa: E402
 
-KNOWN_READ_FAMILIES = ("FULL", "FULL-RAW", "MATCHED", "MATCHED-VER", "EPISODIC")
-RULE_FAMILIES = ("FULL", "FULL-RAW")
+KNOWN_READ_FAMILIES = ("FULL", "FULL-RAW", "FULL-ADAPT", "MATCHED",
+                       "MATCHED-VER", "EPISODIC")
+RULE_FAMILIES = ("FULL", "FULL-RAW", "FULL-ADAPT")
 PERRULE_MAX_SAFE_RULES = 7      # ~45 chars/rule entry; >120 splits and rejects
 
 
@@ -45,7 +46,7 @@ def main():
     for arm in arms:
         if port_list:
             url = f"http://{C.MEM_HOST}:{int(port_list[len(urls) % len(port_list)])}/mcp"
-        elif arm in ("FULL", "FULL-RAW"):
+        elif arm in ("FULL", "FULL-RAW", "FULL-ADAPT"):
             url = C.MEM_URL
         elif arm in ("MATCHED", "MATCHED-VER"):
             url = C.MEM_URL_MATCHED
