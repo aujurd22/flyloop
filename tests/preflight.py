@@ -75,6 +75,21 @@ def main():
     if "EPISODIC" not in arms and len(arms) > 1:
         print("WARN  no EPISODIC arm: write-parity drained=0 by design (V7A)")
 
+    # 5. replication seed guard (G4 incident): a run declared as a replication
+    #    of a prior run MUST set FLYLOOP_RUNSEED to a new value, or the world
+    #    determinism makes it a bit-identical prefix of its parent.
+    parent = os.environ.get("FLYLOOP_REPLICATE_OF", "")
+    if parent:
+        rs = os.environ.get("FLYLOOP_RUNSEED", "")
+        if not rs:
+            fails.append(f"replication of {parent} without FLYLOOP_RUNSEED: "
+                         "same-seed re-run is bit-identical (G4 incident)")
+        elif rs == str(C.SEED):
+            fails.append(f"replication of {parent} with FLYLOOP_RUNSEED={rs} "
+                         "equals the default SEED -- no independence")
+        else:
+            print(f"ok   replication of {parent}, RUN_SEED={rs}")
+
     for arm, url in urls:
         print(f"ok   {arm:12s} -> {url}")
     print(f"ok   book mode: {args.mode}, arms: {arms}, NOISE_EPS: "

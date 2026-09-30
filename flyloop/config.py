@@ -87,6 +87,12 @@ SPEED_PACING_MS = float(os.environ.get("FLYLOOP_PACING_MS", "70"))  # per arm pa
 
 # --- lane configuration ---------------------------------------------------------
 SEED = 20260927
+# Run-level realization seed (G4 incident): the world is a pure function of
+# SEED, so a same-config re-run is a bit-identical prefix of its parent and
+# any "replication" claim off it is vacuous. FLYLOOP_RUNSEED varies ONLY the
+# sampled realizations (probe draws, noise flips, wave phases, poet init);
+# the episode SCHEDULE stays on SEED so episodes still pair across runs.
+RUN_SEED = int(os.environ.get("FLYLOOP_RUNSEED", str(SEED)))
 
 # fact lane: 24 stations, channel rotates on a per-station period (+ shocks)
 FACT_STATIONS = 24
@@ -153,6 +159,27 @@ WAVE_TOL = WAVE_AMP
 # at ~1/13 — the fraction separates them where the all-pairs criterion could
 # not (V6_DESIGN.md). Scoring stays exact; only identification is tolerant.
 MATCH_MIN_FRAC = float(os.environ.get("FLYLOOP_MATCH_MIN_FRAC", "1.0"))
+# V9 marathon: era scheduler — the world changes character every few thousand
+# cycles. Each era defines its own ε and active puzzle families. The system
+# is NOT told when eras change — it must detect shifts from prediction error.
+# Environments repeat (A→B→C→A→B→C) to test whether the system reuses
+# past experience. See MARATHON_DESIGN.md.
+MARATHON = os.environ.get("FLYLOOP_MARATHON", "0") == "1"
+ERA_SCHEDULE = [
+    {"era": "A", "start": 0,     "eps": 0.25, "families": [0, 1, 2, 3]},
+    {"era": "B", "start": 2500,  "eps": 0.15, "families": [0, 1]},
+    {"era": "C", "start": 5000,  "eps": 0.40, "families": [2, 3]},
+    {"era": "A2", "start": 7500,  "eps": 0.25, "families": [0, 1]},   # A returns
+    {"era": "B2", "start": 10000, "eps": 0.40, "families": [0, 1]},   # B returns
+    {"era": "C2", "start": 12500, "eps": 0.15, "families": [2, 3]},   # C returns
+    {"era": "A3", "start": 15000, "eps": 0.25, "families": [0, 1, 2, 3]},
+    {"era": "D", "start": 17500,  "eps": 0.40, "families": [0, 1, 2, 3]},
+    {"era": "B3", "start": 20000, "eps": 0.15, "families": [0, 1]},   # B again
+    {"era": "D2", "start": 22500, "eps": 0.40, "families": [2, 3]},
+    {"era": "A4", "start": 25000, "eps": 0.25, "families": [0, 1, 2, 3]},
+    {"era": "C3", "start": 27500, "eps": 0.15, "families": [2, 3]},   # C again
+]
+MARATHON_DURATION = 30000
 # horizon/mix arithmetic (do not eyeball): mean length 17 probes = 136 cycles
 # -> ~310 episodes/family in 42k cycles -> NEW ~155/family, just inside the
 # 156 distinct (a,b) pairs per family; the 200-draw NEW fallback covers the

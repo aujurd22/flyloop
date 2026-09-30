@@ -38,8 +38,9 @@ class PoetLeg:
                          ffn_h=C.SEQ_FFN, seq=seq_len,
                          kwta_opts=kwta_opts).to(self.device)
         # stream identity, not arm: FULL-A and EPI-A share init (paired arms),
-        # A and B differ (different streams)
-        g = torch.Generator().manual_seed(C.SEED + (1 if tag.endswith("A") else 2))
+        # A and B differ (different streams). RUN_SEED (not SEED): poet init is
+        # a run-level realization, otherwise replications are bit-identical.
+        g = torch.Generator().manual_seed(C.RUN_SEED + (1 if tag.endswith("A") else 2))
         self.masks = {}
         for name, p in self.model.named_parameters():
             m = torch.rand(p.shape, generator=g) < C.SEQ_TRAIN_FRAC

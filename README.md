@@ -197,8 +197,13 @@ observation noise improves rule-based memory by forcing cleaner registrations.
 | 0.40 | ~4.2 | noise dominates; adaptive policy partially compensates |
 
 RSI-0 lineage after four generations: g0 (2.347) → G1 ✗ → G2 ✗ →
-**G3 ✓ (adaptive, 2.000)** → G4 ✓ (replication, 1.917). Two merit-rejections
-and two acceptances — the loop has both positive and negative selection.
+**G3 ✓ (adaptive, 2.000)** → G4 ✗ (retracted: bit-identical duplicate of G3 —
+same-config re-runs replay the parent bit-for-bit without a run seed; the
+replication is requeued as G4′ with `FLYLOOP_RUNSEED`). One acceptance, one
+retraction — and the retraction bought the program a seed split
+(`FLYLOOP_RUNSEED`: schedule stays paired, realizations go independent), a
+preflight guard, and a mechanical independence check. Standing rule: paired
+contrasts want the same seed; replications want a fresh one.
 
 Full data, corrections, and next-step registrations:
 [V7A](findings/v7a_20260929_0242/FINDINGS.md),

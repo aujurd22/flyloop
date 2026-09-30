@@ -10,9 +10,16 @@ from . import config as C
 
 
 def _rng(*args):
-    """Deterministic numpy Generator from an arbitrary key tuple."""
+    """Deterministic numpy Generator from an arbitrary key tuple.
+
+    Structure keys ("puz", "sched", ...) — the episode schedule — stay on
+    C.SEED so episodes pair bit-for-bit across runs; every sampled
+    realization key (probe draws, noise flips, wave phases, fact/seq) uses
+    C.RUN_SEED, so FLYLOOP_RUNSEED yields an independent replication with
+    the SAME schedule (G4 incident: same-seed re-runs are bit-prefixes)."""
     import numpy as np
-    key = hashlib.sha256(repr(("flyloop", C.SEED, *args)).encode()).digest()
+    seed = C.SEED if args[:2] == ("puz", "sched") else C.RUN_SEED
+    key = hashlib.sha256(repr(("flyloop", seed, *args)).encode()).digest()
     return np.random.default_rng(int.from_bytes(key[:8], "big"))
 
 
@@ -283,7 +290,9 @@ def puz_probe(fam: int, cycle: int):
     seeded per rule_id and STABLE across episodes. Consequence: a compact
     (a, b) prototype always misses the wave (irreducible +-W error), while
     instances of the SAME rule accumulate its wave across visits — the P46
-    prototype-exemplar dissociation, in-loop."""
+    prototype-exemplar dissociation, in-loop.
+    V9 marathon: ε and active families come from the ERA_SCHEDULE. The system
+    is NOT told when eras change."""
     ep = puz_episode(fam, cycle)
     r = _rng("puz", "probe", fam, cycle)
     a, b = puz_rule(fam, cycle)
@@ -298,11 +307,31 @@ def puz_probe(fam: int, cycle: int):
         phi = float(rw.random()) * C.PUZ_P
         return int(round(C.WAVE_AMP * math.sin(2 * math.pi * (x + phi) / C.PUZ_P)))
 
+    # V9 marathon: era-specific ε overrides the global NOISE_EPS
+    eps = C.NOISE_EPS
+    if C.MARATHON:
+        eps = _era_eps(cycle)
     y1 = (a * x1 + b + wave(x1)) % C.PUZ_P
-    if C.NOISE_EPS > 0 and float(r.random()) < C.NOISE_EPS:
+    if eps > 0 and float(r.random()) < eps:
         y1 = (y1 + int(r.integers(1, C.PUZ_P))) % C.PUZ_P
     truth = (a * xp + b + wave(xp)) % C.PUZ_P
     return (x1, y1), xp, truth
+
+
+def _era_eps(cycle: int) -> float:
+    """Current era's ε (marathon mode only)."""
+    for era in reversed(C.ERA_SCHEDULE):
+        if cycle >= era["start"]:
+            return era["eps"]
+    return C.ERA_SCHEDULE[0]["eps"]
+
+
+def current_era(cycle: int) -> str:
+    """Current era name (marathon mode only)."""
+    for era in reversed(C.ERA_SCHEDULE):
+        if cycle >= era["start"]:
+            return era["era"]
+    return C.ERA_SCHEDULE[0]["era"]
 
 
 def puz_rotation_events(cycle: int) -> list:

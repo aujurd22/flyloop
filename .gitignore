@@ -16,3 +16,4 @@ resume_config.json
 # model checkpoints / pickles
 *.pkl
 *.pt
+_*_launch.py
