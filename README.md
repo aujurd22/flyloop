@@ -174,6 +174,40 @@ is a different axis and remains untested in the loop (V7).
 [findings/v6t_20260928_2159](findings/v6t_20260928_2159/FINDINGS.md),
 [V6_DESIGN.md](V6_DESIGN.md)
 
+### Runs 7-8 — V7 (factorial + wavy world) and V8 (adaptive read policy)
+
+**V7A** (factorial 2×2, exact matcher): support effect **+2.14 CI[0.82, 3.44]**
+is the only significant contrast; write-depth effect −0.99 CI[−2.29, +0.31],
+sign unconclusive. **V7B** (wavy world): no order inversion — coverage is the
+binding constraint. **V7C** (write-depth A/B): **shallow write significantly
+beats deep write** (−0.655 CI[−1.10, −0.17]) — V5's write-time-filter claim
+REFUTED in direction.
+
+**V8** (ε=0.40, 4 arms including FULL-ADAPT): the adaptive read policy
+(rolling flip estimate adjusts min_frac) **beats fixed policy by 0.41 errors**
+(3.741 vs 4.155). The full ε dose-response reveals a **non-monotonic curve**
+— ε=0.15 gives the BEST FULL E20 (1.102), lower than ε=0 (2.347): moderate
+observation noise improves rule-based memory by forcing cleaner registrations.
+
+| ε | FULL E20 | reading |
+|---|---|---|
+| 0 | 2.347 | baseline; marginal rules pass verification |
+| **0.15** | **1.102** | **optimal**: low-rate flips filter marginal rules |
+| 0.25 | ~3.6 | noise starts overwhelming the filter |
+| 0.40 | ~4.2 | noise dominates; adaptive policy partially compensates |
+
+RSI-0 lineage after four generations: g0 (2.347) → G1 ✗ → G2 ✗ →
+**G3 ✓ (adaptive, 2.000)** → G4 ✓ (replication, 1.917). Two merit-rejections
+and two acceptances — the loop has both positive and negative selection.
+
+Full data, corrections, and next-step registrations:
+[V7A](findings/v7a_20260929_0242/FINDINGS.md),
+[V7B](findings/v7b_20260929_0447/FINDINGS.md),
+[V7C](findings/v7c_20260929_1940/FINDINGS.md),
+[V8](findings/v8_20260930_0310/FINDINGS.md),
+[G4](findings/rsi0_g4_20260930_1045/FINDINGS.md),
+[V8_DESIGN.md](V8_DESIGN.md)
+
 ## Engineering discipline (read this before writing to a memory system in a loop)
 
 Two live bugs were caught by pre-launch audits, and both generalize:
@@ -190,6 +224,20 @@ Two live bugs were caught by pre-launch audits, and both generalize:
   metadata. `tests/test_parsers.py` fuzzes every emitted form under the exact
   80-char cut.
 
+Three more from V6-V8:
+
+- **force_new is load-bearing for multi-entry designs.** Same-family entries
+  (book rules, archive rows) share enough text to exceed the 0.92 duplicate
+  threshold — without `force_new`, the merge zone rewrites earlier entries
+  in place, silently destroying history. This killed G1 (single 190-char
+  entry) and would have killed the per-rule archive.
+- **Entries must stay < 120 chars.** The engine's `split_chunks` cuts texts
+  longer than 120 chars into multiple chunks; the state_key atomicity guard
+  then rejects state_key writes that produce more than one chunk — silently.
+- **Every arm needs its own FlyMemory instance.** The merge zone ignores
+  compartments, so same-persona texts from different arms would collide in
+  one store. Ports are disjoint per arm (V7C: 8769/8770/8771).
+
 Robustness for unattended multi-hour runs: per-cycle try/except with a
 consecutive-failure circuit breaker, atomic checkpoints every 50 cycles,
 heartbeat/status/report cadence, local-mirror degradation when the memory
@@ -198,62 +246,3 @@ logon-resume hook so a reboot continues from the checkpoint (the absolute
 deadline lives in `deadline.json`).
 
 ## Repository layout
-
-```
-flyloop/            the loop implementation
-  config.py         all knobs, thresholds, quotas, calibrated text data
-  world.py          deterministic world: facts / puzzle / sequence / noise
-  memclient.py      async MCP client to the sandbox FlyMemory + local mirror
-  reasoner.py       mechanical predictors + strict parsers
-  poetleg.py        k-WTA GPT leg (imports FlyPoet's train_v2.GPT)
-  insight.py        drift-response tracking, insight detector, ledger
-  cycle.py          the seven-step cycle
-  worker.py         run loop: checkpoints, quotas, adjudication, reports
-  supervisor.py     process supervision, keep-awake, finalize-from-disk
-tests/
-  test_parsers.py       truncation fuzzing of every emitted text form
-  calibrate_texts.py    pre-launch similarity calibration (hard constraints)
-findings/
-  night_20260927_0143/  curated artifacts from run 1 (report, registry, findings)
-DESIGN.md           v1 design: world semantics, seven-step mapping
-DESIGN_V2.md        v2 design: fixes, A/B arms, governance upgrades, duration policy
-README.md           this file
-```
-
-## Usage
-
-Requirements: Windows (the supervision layer is PowerShell/ctypes), Python 3.13
-with `mcp`, `torch`, `sentence-transformers`; a FlyMemory checkout reachable
-for the sandbox instance; a FlyPoet checkout for the `train_v2` import.
-
-Paths default to the repository layout and can be overridden with environment
-variables: `FLYLOOP_PYTHON` / `FLYLOOP_PYTHONW` (interpreter with the
-dependencies), `FLYLOOP_ROOT` (repo root), `FLYLOOP_FLYPOET` (FlyPoet
-checkout), `FLYLOOP_PORT` (sandbox memory port, default 8767).
-
-1. Copy the FlyMemory package into `sandbox_mem/flymemory/` (an isolated
-   third instance: own pickled DB, own port — never the production instance).
-2. Run the gates: `python tests/test_parsers.py` and
-   `python tests/calibrate_texts.py` — both must pass before any launch.
-3. Smoke: `python -m flyloop.worker --run-dir runs/smoke --max-cycles 200 --duration-h 0.5`
-4. Overnight: `powershell -File run_night.ps1` (starts the sandbox service, then
-   the supervisor detached; monitor `runs/<id>/STATUS.md`; stop gracefully by
-   creating a `STOP` file in the run directory).
-
-All text content written to memory is intentionally multilingual (the
-embedder is multilingual and CJK prose is the realistic surface); code,
-comments, and documentation are English.
-
-## Duration policy
-
-Time is a ceiling, not a goal — events are bought by statistics. Empirically:
-2-3 h covers the engineering-verification tier; 5-6 h satisfies the full
-prediction set (shock counts, discovery counts, recovery distributions);
-10 h buys a long-stability claim. Prefer *accelerating the world's clock*
-(shorter rotation/shock periods, more gradient steps per cycle) over longer
-wall-clock runs, and prefer two 5 h runs with a design change in between over
-one 10 h run. See DESIGN_V2.md section 8.
-
-## License
-
-MIT. The three component repos have their own licenses.
