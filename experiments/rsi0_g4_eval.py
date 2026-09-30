@@ -29,9 +29,10 @@ from analyze_v4 import load_insights, boot_ci_clustered  # noqa: E402
 RUNS = {
     "v6t (gen0 fixed)": ("runs/v6t_20260928_2159", "FULL"),
     "g3 (gen3 adaptive)": ("runs/rsi0_g3_20260930_0808", "FULL-ADAPT"),
-    "g4 (gen4 adaptive)": ("runs/rsi0_g4_20260930_1045", "FULL-ADAPT"),
-    "g4 MATCHED": ("runs/rsi0_g4_20260930_1045", "MATCHED"),
-    "g4 EPISODIC": ("runs/rsi0_g4_20260930_1045", "EPISODIC"),
+    "g4 (gen4 retracted)": ("runs/rsi0_g4_20260930_1045", "FULL-ADAPT"),
+    "g4p (true repl.)": ("runs/rsi0_g4p_20260930_2335", "FULL-ADAPT"),
+    "g4p MATCHED": ("runs/rsi0_g4p_20260930_2335", "MATCHED"),
+    "g4p EPISODIC": ("runs/rsi0_g4p_20260930_2335", "EPISODIC"),
 }
 
 
@@ -102,9 +103,16 @@ def main():
         say(f"{b} - {a}: {mean:+.3f} CI[{lo:+.3f},{hi:+.3f}] "
             f"n_ep={len(d)} -> {effect} ({sig})")
 
-    paired("v6t (gen0 fixed)", "g4 (gen4 adaptive)", None, None)
+    paired("v6t (gen0 fixed)", "g4 (gen4 retracted)", None, None)
     say()
-    paired("g3 (gen3 adaptive)", "g4 (gen4 adaptive)", None, None)
+    paired("g3 (gen3 adaptive)", "g4 (gen4 retracted)", None, None)
+
+    say()
+    say("--- G4prime (true replication, RUNSEED=20260930) ---")
+    if os.path.isdir(os.path.join(ROOT, "runs", "rsi0_g4p_20260930_2335")):
+        paired("v6t (gen0 fixed)", "g4p (true repl.)", None, None)
+        say()
+        paired("g3 (gen3 adaptive)", "g4p (true repl.)", None, None)
 
     out_path = os.path.join(ROOT, "runs", "rsi0_g4_20260930_1045",
                             "g4_adjudication.txt")

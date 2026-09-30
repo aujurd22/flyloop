@@ -196,14 +196,18 @@ observation noise improves rule-based memory by forcing cleaner registrations.
 | 0.25 | ~3.6 | noise starts overwhelming the filter |
 | 0.40 | ~4.2 | noise dominates; adaptive policy partially compensates |
 
-RSI-0 lineage after four generations: g0 (2.347) → G1 ✗ → G2 ✗ →
-**G3 ✓ (adaptive, 2.000)** → G4 ✗ (retracted: bit-identical duplicate of G3 —
-same-config re-runs replay the parent bit-for-bit without a run seed; the
-replication is requeued as G4′ with `FLYLOOP_RUNSEED`). One acceptance, one
-retraction — and the retraction bought the program a seed split
-(`FLYLOOP_RUNSEED`: schedule stays paired, realizations go independent), a
-preflight guard, and a mechanical independence check. Standing rule: paired
-contrasts want the same seed; replications want a fresh one.
+RSI-0 lineage: g0 (2.347) → G1 ✗ → G2 ✗ → G3 "accepted" (adaptive, 2.000)
+→ G4 ✗ (retracted: bit-identical duplicate of G3) → **G4′ (TRUE replication,
+fresh realizations): the G3 gain does NOT replicate** (+0.163 vs parent,
+CI [−0.976, +1.380]) — the adaptive-policy effect is within realization
+noise; its acceptance stands downgraded to single-realization evidence.
+What does replicate, strongly: the structured-memory advantage
+(G4′: registry 2.581 vs archive 5.186 vs none 5.372). The loop's most
+reliable faculty remains negative selection; the next accepted mutation
+must come from a new axis (registered: abstraction-loss world / V9), not
+re-tuning. The retraction bought the seed split (`FLYLOOP_RUNSEED`), a
+preflight guard, and a mechanical independence check. Standing rule:
+paired contrasts want the same seed; replications want a fresh one.
 
 Full data, corrections, and next-step registrations:
 [V7A](findings/v7a_20260929_0242/FINDINGS.md),

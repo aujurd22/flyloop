@@ -60,3 +60,12 @@ Run the independence check BEFORE claiming replication anywhere in the
 program, and treat "paired contrast" and "independent replication" as
 different evidence classes with opposite seed policy: contrasts want the
 same seed; replications want a fresh one.
+
+---
+
+**RESOLUTION (10-01 01:40).** The queued G4′ ran to completion as the true
+replication (`findings/rsi0_g4p_20260930_2335/FINDINGS.md`): independent
+realizations PASS the check, and the G3 gain did **not** replicate
+(+0.163 vs parent, CI [−0.976, +1.380], n.s.). The structured-memory
+advantage replicated strongly. See the G4′ findings for the full
+adjudication and lineage consequences.
