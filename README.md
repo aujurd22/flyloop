@@ -209,12 +209,36 @@ re-tuning. The retraction bought the seed split (`FLYLOOP_RUNSEED`), a
 preflight guard, and a mechanical independence check. Standing rule:
 paired contrasts want the same seed; replications want a fresh one.
 
+**12.5h marathon × 12-era world** (ε and active families rotate every ~2.5k
+cycles, unannounced): era transitions cause ~no regression — the rule
+registry absorbs world change with zero forgetting and no detectable
+transient; repeat eras halve RECALL error 17.5k cycles later (C errR 0.198
+→ 0.090); frozen ≈ adaptive across all 12 eras (mean Δ +0.0022),
+replicating the G4′ verdict at 14× timescale.
+[Marathon](findings/marathon_20260930_1545/FINDINGS.md)
+
+**V8-LLM transfer arc** (Qwen2.5-0.5B + LoRA on GSM8K, does the toy-world
+condition law survive contact with real fine-tuning?): at generalization
+regime the noise/depth effects are absent and bounded ≤ ~3pp (vs flyloop's
+2-4× relative) across 4 cells × 2 seeds; under memorization pressure
+(200 × 8ep, train-recall 42.7% vs test 32.4%) the laws still do not
+reappear — instead the model emits the TRUE answer on corrupted training
+instances ~35pp more often than it replays the corrupted stored value.
+**Parametric storage is not episodic storage**: the LM behaves like the
+registry arm with a built-in verification filter — it already sits on the
+winning side of the program's law (abstraction beats episodic under
+noise). The laws bind to instance-addressable memory systems; benchmark
+generalization is not one.
+[V8-LLM-2](findings/v8_llm_v2/FINDINGS.md),
+[V8-LLM-3](findings/v8_llm_v3/FINDINGS.md)
+
 Full data, corrections, and next-step registrations:
 [V7A](findings/v7a_20260929_0242/FINDINGS.md),
 [V7B](findings/v7b_20260929_0447/FINDINGS.md),
 [V7C](findings/v7c_20260929_1940/FINDINGS.md),
 [V8](findings/v8_20260930_0310/FINDINGS.md),
 [G4](findings/rsi0_g4_20260930_1045/FINDINGS.md),
+[G4′](findings/rsi0_g4p_20260930_2335/FINDINGS.md),
 [V8_DESIGN.md](V8_DESIGN.md)
 
 ## Engineering discipline (read this before writing to a memory system in a loop)

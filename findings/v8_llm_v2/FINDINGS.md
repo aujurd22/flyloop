@@ -49,11 +49,12 @@ instance retrieval at test time for noise to corrupt. The transfer
 prediction this generates is registered and TESTED in V8-LLM-3
 (v8_llm_train_v3.py, running): under memorization pressure (200 examples ×
 8 epochs, eval on the training instances themselves) the flyloop laws
-should REAPPEAR — corrupted stored conclusions should be reproduced
-verbatim if parametric storage behaves like episodic memory. If they do,
-the boundary is located between storage-dominated and generalization-
-dominated regimes; if they do not, parametric storage is noise-robust in a
-way episodic memory is not — either outcome is a clean statement.
+should REAPPEAR. **RESOLVED (see findings/v8_llm_v3/FINDINGS.md): they do
+not** — under memorization pressure (200×8ep, train-recall 42.7% vs test
+32.4%) the model emits the TRUE answer on corrupted instances ~35pp more
+often than it replays the corrupted stored value. Parametric storage is
+not episodic storage; the LM sits on the abstraction (winning) side of
+flyloop's own law.
 
 ## Engineering deposits
 
