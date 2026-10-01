@@ -1,0 +1,32 @@
+=== V10 composite-world adjudication (SDB-aligned) ===
+
+--- RECALL E20 by rule type (cluster bootstrap by lineage) ---
+arm        type           E20                 CI  n_ep
+FULL       standard     3.864 [2.250,5.857]      22
+FULL       periodic     6.154 [3.750,8.462]      13
+FULL       composite    1.333 [0.750,2.000]       9
+MATCHED    standard     5.773 [4.087,7.667]      22
+MATCHED    periodic     6.846 [4.167,9.000]      13
+MATCHED    composite    5.222 [2.300,10.429]       9
+EPISODIC   standard     5.864 [4.167,7.737]      22
+EPISODIC   periodic     6.846 [4.167,9.000]      13
+EPISODIC   composite    5.333 [2.545,10.571]       9
+
+--- P1 (periodicity favors episodic) ---
+FULL 6.154 vs MATCHED 6.846 on periodic RECALL -> P1 REFUTED
+
+--- discovery speed (FULL arm): first-DISCOVERY cycle per type ---
+composite : n= 21 median_cycle=2636 mean=2436
+periodic  : n= 20 median_cycle=2498 mean=2360
+standard  : n= 41 median_cycle=2464 mean=2656
+
+--- P2 composition transfer (FULL arm) ---
+composite RECALL probe-1 hit rate (FULL): 5/9 = 56%  (random ~7.7%; >50% suggests real inference from the two predecessor rules)
+
+--- P3 anomaly handling (all arms) ---
+EPISODIC  : anomaly probes 97, error 86 (89%)  [unpredictable by design; memorization checked via res/book writes at anomaly episodes -- see counts]
+FULL      : anomaly probes 97, error 87 (90%)  [unpredictable by design; memorization checked via res/book writes at anomaly episodes -- see counts]
+MATCHED   : anomaly probes 97, error 86 (89%)  [unpredictable by design; memorization checked via res/book writes at anomaly episodes -- see counts]
+
+--- ICR: observation bytes consumed / memory bytes stored ---
+FULL      : ~0/15641 = 0.0 (probes=None, book_bytes=15641, epi_bytes=None)
