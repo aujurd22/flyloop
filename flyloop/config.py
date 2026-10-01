@@ -148,6 +148,18 @@ NOISE_EPS = float(os.environ.get("FLYLOOP_NOISE_EPS", "0"))
 WAVE_AMP = int(os.environ.get("FLYLOOP_WAVE_AMP", "0"))
 # W9C M5 residual registry: max confirmed residuals stored per rule
 RES_CAP = int(os.environ.get("FLYLOOP_RES_CAP", "4"))
+
+# --- V10 composite world (FLYLOOP_COMPOSITE=1) --------------------------------
+# Three regularity types in one schedule: fam 1 rules drift with visit count
+# (periodicity -- the compact (a,b) cannot carry (b0, delta, k)); fam 2 rules
+# with index >=2 derive from the family's own two predecessors (composition);
+# a 3% anomaly probe class draws reveal+truth from an outlier generator
+# (surprise/hallucination boundary). All schedule keys stay on SEED; anomaly
+# draws are realizations (RUN_SEED).
+COMPOSITE = os.environ.get("FLYLOOP_COMPOSITE", "0") == "1"
+PERIODIC_FAM = 1
+COMPOSITE_FAM = 2
+ANOMALY_P = float(os.environ.get("FLYLOOP_ANOMALY_P", "0.03"))
 # discovery/matching band under the wavy world: a prediction within
 # +-WAVE_AMP of truth counts as band-correct for the consec gate, and a
 # candidate pair/rule within the band counts as reproduced for matching.

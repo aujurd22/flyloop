@@ -462,6 +462,7 @@ class CycleRunner:
                    probe_idx=probe_idx,
                    prediction=y, truth=truth, error=err,
                    method=method, retrieval_rank=aux.get("book_rank", aux.get("epi_rank")),
+                   anomaly=int(world.puz_anomaly(fam, c)),
                    res_pred=aux.get("res_pred"),
                    stale_candidate_present=int(bool(stale_present)),
                    stale_intrusion=stale_intrusion,

@@ -159,6 +159,8 @@ def puz_schedule():
         rng = _rng("puz", "sched", fam)
         episodes = []
         used = set()
+        visits = {}   # V10 periodic: visit count per rule_id
+        deltas = {}   # V10 periodic: per-rule drift step
         by_index = {}          # epoch -> rule_id
         rules = {}             # rule_id -> (a, b)
         counter = 0
@@ -207,6 +209,30 @@ def puz_schedule():
                     typ = "VARIANT"
                 rid = f"f{fam}r{counter}"; counter += 1
                 rules[rid] = (a, b)
+            if C.COMPOSITE:
+                # V10 composite family: R_i = (a_{i-2}+a_{i-1}, b_{i-2}-b_{i-1})
+                # from the family's own two predecessor EPISODES -- a registry
+                # holding R_{i-2}, R_{i-1} can derive R_i WITHOUT observing it
+                # (SDB TRANSFER in-loop). Derived ONLY at first creation of a
+                # rid: re-deriving at RECALL would rewrite an old rule's
+                # params from unrelated predecessors (schedule instability).
+                created = typ in ("NEW", "VARIANT")
+                if fam == C.COMPOSITE_FAM and i >= 2 and created:
+                    pa2, pb2 = episodes[i - 2]["a"], episodes[i - 2]["b"]
+                    pa1, pb1 = episodes[i - 1]["a"], episodes[i - 1]["b"]
+                    a = (pa2 + pa1) % C.PUZ_P
+                    b = (pb2 - pb1) % C.PUZ_P
+                    rules[rid] = (a, b)
+                # V10 periodic family: the k-th visit of a rule presents
+                # b = b0 + delta*k (delta from the schedule seed). NEW/VARIANT
+                # create fresh rids (k=0, undrifted); RECALL visits drift.
+                if fam == C.PERIODIC_FAM:
+                    k = visits.get(rid, 0)
+                    if rid not in deltas:
+                        deltas[rid] = 1 + int(rng.integers(0, 3))
+                    if k > 0:
+                        b = (rules[rid][1] + deltas[rid] * k) % C.PUZ_P
+                    visits[rid] = k + 1
             used.add((a, b))
             by_index[i] = rid
             n_probes = int(rng.choice(C.EPISODE_PROBE_LENS, p=C.EPISODE_PROBE_WEIGHTS))
@@ -315,7 +341,23 @@ def puz_probe(fam: int, cycle: int):
     if eps > 0 and float(r.random()) < eps:
         y1 = (y1 + int(r.integers(1, C.PUZ_P))) % C.PUZ_P
     truth = (a * xp + b + wave(xp)) % C.PUZ_P
+    # V10 anomaly: the whole probe (reveal + truth) comes from an outlier
+    # generator -- unpredictable by any rule. SDB SURPRISE in-loop: the
+    # memory-side question is whether the arm REFUSES it or memorizes it.
+    if C.COMPOSITE and C.ANOMALY_P > 0 and \
+            float(_rng("puz", "anom", fam, cycle).random()) < C.ANOMALY_P:
+        ra = _rng("puz", "anomval", fam, cycle)
+        y1 = int(ra.integers(0, C.PUZ_P))
+        truth = int(ra.integers(0, C.PUZ_P))
     return (x1, y1), xp, truth
+
+
+def puz_anomaly(fam: int, cycle: int) -> bool:
+    """V10: anomaly-probe flag (same key as puz_probe's override, so the
+    flag and the override always agree)."""
+    if not C.COMPOSITE or C.ANOMALY_P <= 0:
+        return False
+    return float(_rng("puz", "anom", fam, cycle).random()) < C.ANOMALY_P
 
 
 def _era_eps(cycle: int) -> float:
