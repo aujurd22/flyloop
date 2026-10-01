@@ -373,7 +373,7 @@ class CycleRunner:
                 self.counts["recalls"] += 1
                 registry = reasoner.parse_book_v3(block_b, fam)
                 cands = reasoner.book_candidates(registry, C.BOOK_CAP)
-        elif self.arm in ("MATCHED", "MATCHED-VER"):
+        elif self.arm in ("MATCHED", "MATCHED-VER", "MATCHED-EXACT"):
             # exact state_lookup over the runner's own archive index (RAM
             # mirror of written keys) — similarity-based recall would rank
             # same-family archive entries arbitrarily (heads identical)
@@ -403,7 +403,8 @@ class CycleRunner:
             adj_min_frac = max(0.50, C.MATCH_MIN_FRAC * (1.0 - flip_rate))
         y, method, n_ver, ab, aux = reasoner.predict_puzzle_v4(
             entries, fam, epoch, xp, obs, cands=cands, epi_cands=epi_cands,
-            min_frac=adj_min_frac)
+            min_frac=adj_min_frac,
+            epi_tol=0 if self.arm == "MATCHED-EXACT" else None)
 
         stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT") else \
             any(int(m.group(5)) != epoch for m in
@@ -472,7 +473,7 @@ class CycleRunner:
         # is gated on consec-3 instead of episode end -- rows enter only
         # after 3 consecutive correct predictions from their own content.
         ver_gate = (self.arm == "MATCHED-VER" and d.get("verified", False))
-        if (self.arm in ("MATCHED", "MATCHED-VER") and not d["archived"]
+        if (self.arm in ("MATCHED", "MATCHED-VER", "MATCHED-EXACT") and not d["archived"]
                 and (ver_gate or
                      (self.arm == "MATCHED" and d["probes"] >= wep["n_probes"]))):
             pairs_s = " ".join(f"{x}:{v}" for x, v in

@@ -258,7 +258,8 @@ def predict_puzzle(entries, fam: int, epoch: int, xp: int):
 
 
 def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
-                      cands=None, epi_cands=None, min_frac=None):
+                      cands=None, epi_cands=None, min_frac=None,
+                      epi_tol=None):
     """V4 hierarchy over PRE-FOLDED live observations (the current probe's
     revealed pair is already in `obs` — applies to ALL arms symmetrically).
     min_frac overrides C.MATCH_MIN_FRAC when set (V8 adaptive read policy).
@@ -307,11 +308,12 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
     if epi_cands and obs:
         epi_pool = [(pairs, ep) for pairs, ep in epi_cands if ep != epoch][
             :C.EPIREG_CAP]
-        cand, rank, n_m = epi_test(epi_pool, obs, tol=C.WAVE_TOL)
+        e_tol = C.WAVE_TOL if epi_tol is None else epi_tol
+        cand, rank, n_m = epi_test(epi_pool, obs, tol=e_tol)
         eff_mf = min_frac if min_frac is not None else C.MATCH_MIN_FRAC
         if cand is None and eff_mf < 1.0 and len(obs) >= 2:
             cand, rank, frac = epi_test(epi_pool, obs, min_frac=eff_mf,
-                                        tol=C.WAVE_TOL)
+                                        tol=e_tol)
             if cand is not None:
                 cpairs, cep = cand
                 ab = fit_from(list(cpairs) + obs, p)
