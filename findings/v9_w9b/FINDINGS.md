@@ -61,3 +61,12 @@ predictions for W9C (M5 vs same-world controls):
 | W9A "plateau is matcher self-inflicted" | **REFUTED** (W9B) |
 | "identification is the binding constraint at W≥2" | REFUTED |
 | "prediction-layer compression carries the plateau" | **SUPPORTED** (err100 ≈ P(wave≠0) arithmetic) |
+
+---
+
+**RESOLUTION (10-01 23:05).** W9C ran the M5 recovery: FULL-RES recovers
++0.787 E20 (CI [+0.229, +1.364], excl. 0) against a bit-identical control —
+see findings/v9_w9c/FINDINGS.md. The plateau is confirmed
+prediction-layer; M5 is a significant recovery (~7% of the cliff), with
+the bulk still wave-sparsity at unsampled x. Replication queued (W9D,
+fresh RUNSEED) before "accepted" language.
