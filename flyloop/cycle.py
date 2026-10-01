@@ -103,6 +103,23 @@ def book_rule_key(fam, rid):
     return f"flyloop/book/{fam}/{rid}"
 
 
+def res_text(fam, rid, a, b, ep, res, c):
+    """W9C M5: one residual entry per rule (~70 chars with 4 residuals) --
+    the compact rule's OWN LOSS, stored so prediction can add it back.
+    Perrule discipline applies: force_new (same head >0.92 similar, the
+    merge zone must not rewrite in place). Format mirrors reasoner's
+    parse_res_entry: res=a,b,ep,x1,x2,..::(x1,r1)(x2,r2)..."""
+    tag = FAM_TAGS[fam]
+    xs = ",".join(str(x) for x, _ in res)
+    pts = "".join(f"({x},{r})" for x, r in res)
+    return (f"{BOOK_TAG} {FAM_TAGS[fam]}残差 c={c} :: "
+            f"{tag}r{rid.split('r')[1]}res={a},{b},{ep},{xs}::{pts}")
+
+
+def res_state_key(fam, rid):
+    return f"flyloop/book/{fam}/{rid}/res"
+
+
 def epireg_text(fam, ep, c, pairs_str):
     """MATCHED arm's episodic archive entry: the episode's raw pair table,
     one entry per episode (unique state_key -> no in-place overwrites).
@@ -142,6 +159,12 @@ class CycleRunner:
         self.pad_seq = pad_seq
         self.disc = {}
         self.book = {}   # {fam: {rid: {"a","b","ep"}}}  (mirror of the RULEBOOK entry)
+        # W9C M5: residual confirmation mirrors (RAM-only; the store holds
+        # confirmed entries). res_seen[x][r] counts visits; res_conf[x]=r
+        # after 2-of-2 agreement at the same x (flip resistance).
+        self.res_seen = {}   # {fam: {rid: {x: {r: count}}}}
+        self.res_conf = {}   # {fam: {rid: {x: r}}}
+        self.res_last = {}   # {(fam, rid): last written keep-list}
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
         self.flip_hist = deque(maxlen=20)  # V8 adaptive: rolling book_test outcomes
@@ -328,6 +351,13 @@ class CycleRunner:
         # probe's revealed pair is folded into the live observations BEFORE
         # prediction — in V3 it landed after, blinding probe 1 by artifact.
         d["table"][str(x1)] = y1
+        # W9C M5: per-episode residual sample buffer (NOT the write-capped
+        # table) -- within-episode x repeats confirm raw pairs 2-of-2 on the
+        # spot; cross-visit repeats confirm on later visits.
+        buf = d.setdefault("res_buf", [])
+        buf.append((x1, y1))
+        if len(buf) > 12:
+            del buf[:-12]
         d["probes"] += 1
         d["unseen_since_write"] += 1
         # table dict keys are str (JSON round-trip through state.json); the
@@ -341,7 +371,7 @@ class CycleRunner:
         entries = parse_recall(block_t)
         cands = None
         epi_cands = None
-        if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT"):
+        if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES"):
             # RSI-0 G2 perrule mode: exact state_lookup over the runner's own
             # rule index (RAM mirror), same pattern as the MATCHED archive
             cands = []
@@ -401,12 +431,25 @@ class CycleRunner:
         if self.arm == "FULL-ADAPT" and len(self.flip_hist) >= 5:
             flip_rate = sum(self.flip_hist) / len(self.flip_hist)
             adj_min_frac = max(0.50, C.MATCH_MIN_FRAC * (1.0 - flip_rate))
+        res_map = None
+        if self.arm == "FULL-RES" and cands:
+            res_map = {}
+            for rid_c, *_ in cands[:C.BOOK_TEST_K]:
+                try:
+                    rb_res, _ = await self.mem.state_lookup(
+                        res_state_key(fam, rid_c))
+                    got = reasoner.parse_res_entry(rb_res or "")
+                    if got:
+                        res_map[rid_c] = got
+                except Exception:
+                    pass
         y, method, n_ver, ab, aux = reasoner.predict_puzzle_v4(
             entries, fam, epoch, xp, obs, cands=cands, epi_cands=epi_cands,
             min_frac=adj_min_frac,
-            epi_tol=0 if self.arm == "MATCHED-EXACT" else None)
+            epi_tol=0 if self.arm == "MATCHED-EXACT" else None,
+            res_map=res_map)
 
-        stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT") else \
+        stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES") else \
             any(int(m.group(5)) != epoch for m in
                 [reasoner.P_PAIRS.search(t) for _, t in entries]
                 if m and int(m.group(2)) == fam)
@@ -419,6 +462,7 @@ class CycleRunner:
                    probe_idx=probe_idx,
                    prediction=y, truth=truth, error=err,
                    method=method, retrieval_rank=aux.get("book_rank", aux.get("epi_rank")),
+                   res_pred=aux.get("res_pred"),
                    stale_candidate_present=int(bool(stale_present)),
                    stale_intrusion=stale_intrusion,
                    discovery=False, reactivation=False, insight_kind=None,
@@ -519,7 +563,7 @@ class CycleRunner:
         if d["consec"] >= C.PUZ_DISC_CONSEC:
             d["verified"] = True
         disc_gate = 1 if self.arm == "FULL-RAW" else C.PUZ_DISC_CONSEC
-        if (self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT") and d["consec"] >= disc_gate
+        if (self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES") and d["consec"] >= disc_gate
                 and not d["done"] and ab):
             d["done"] = True
             a, b = ab
@@ -591,6 +635,67 @@ class CycleRunner:
             self.log(f"[c{c}] INSIGHT {kind} fam={fam}({word}) ep={epoch} rid={rid} "
                      f"y=({a}x+{b}) mod {C.PUZ_P} (book has "
                      f"{sum(len(v) for v in self.book.values())} rules)")
+
+        # FULL-RES (W9C / M5 residual registry): store the compact rule's OWN
+        # LOSS. At episode end, residuals r = y1-(a*x1+b) from revealed pairs
+        # are confirmed 2-of-2 across visits of the same x (a flip lands the
+        # same wrong r twice with prob ~ eps^2 -- structural noise拒绝), then
+        # written to the rule's residual entry. Prediction replays the
+        # nearest-x residual (reasoner.wave_est) -- the wave enters the
+        # prediction instead of being compressed away (the W9B floor).
+        if self.arm == "FULL-RES":
+            # W9C debug counters (remove after adjudication)
+            self.counts["res_chk"] = self.counts.get("res_chk", 0) + 1
+            if d["probes"] >= wep["n_probes"]:
+                self.counts["res_chk_end"] = \
+                    self.counts.get("res_chk_end", 0) + 1
+                if not (self.book.get(fam, {}).get(wep["rule_id"])):
+                    self.counts["res_chk_norule"] = \
+                        self.counts.get("res_chk_norule", 0) + 1
+        if (self.arm == "FULL-RES" and not d.get("res_archived")
+                and d["probes"] >= wep["n_probes"]):
+            d["res_archived"] = True
+            rid_r = wep["rule_id"]
+            rmeta = self.book.get(fam, {}).get(rid_r)
+            if rmeta:
+                try:
+                    a_r, b_r = rmeta["a"], rmeta["b"]
+                    seen = self.res_seen.setdefault(fam, {}).setdefault(rid_r, {})
+                    conf = self.res_conf.setdefault(fam, {}).setdefault(rid_r, {})
+                    fresh_n = 0
+                    for x1, y1 in d.get("res_buf", [])[-12:]:
+                        xi, yi = int(x1), int(y1)
+                        # confirm RAW pairs (x, y): the wave is rule-stable,
+                        # so the true pair replays exactly across visits and
+                        # hits 2-of-2; a flipped y is random and never does.
+                        # No fit-based filtering: the fit carries its own
+                        # wave pollution (the W9B lesson) -- and the anchor
+                        # prediction cancels any constant fit offset anyway.
+                        fresh_n += 1
+                        cnts = seen.setdefault(xi, {})
+                        cnts[yi] = cnts.get(yi, 0) + 1
+                        if cnts[yi] >= 2:
+                            conf[xi] = yi
+                    self.counts["res_fresh"] = self.counts.get("res_fresh", 0) + fresh_n
+                    self.counts["res_conf_n"] = sum(len({}) for _ in [0]) or len(conf)
+                    keep = sorted(conf.items())[-C.RES_CAP:]
+                    if keep and keep != self.res_last.get((fam, rid_r)):
+                        self.res_last[(fam, rid_r)] = keep
+                        text_r = res_text(fam, rid_r, a_r, b_r, epoch, keep, c)
+                        await self._remember(
+                            text_r, tags="flyloop,residual",
+                            compartment=C.COMPARTMENT_RULE,
+                            state_key=res_state_key(fam, rid_r),
+                            state_value=f"n{len(keep)}", force_new=True)
+                        self.counts["res_writes"] = \
+                            self.counts.get("res_writes", 0) + 1
+                        if self.pad_sync is not None:
+                            self.pad_sync.charge("FULL",
+                                                 len(text_r.encode("utf-8")))
+                except Exception as e:
+                    self.counts["res_err"] = \
+                        self.counts.get("res_err", 0) + 1
+                    rec["notes"].append(f"res_err:{type(e).__name__}")
 
     # ------------------------------------------------------------------
     def to_dict(self):

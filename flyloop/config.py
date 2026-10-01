@@ -146,6 +146,8 @@ NOISE_EPS = float(os.environ.get("FLYLOOP_NOISE_EPS", "0"))
 # has an irreducible +-WAVE_AMP error floor while the episode's own raw pair
 # table reproduces its entries exactly. 0 = off (V4/V5/V6 behavior).
 WAVE_AMP = int(os.environ.get("FLYLOOP_WAVE_AMP", "0"))
+# W9C M5 residual registry: max confirmed residuals stored per rule
+RES_CAP = int(os.environ.get("FLYLOOP_RES_CAP", "4"))
 # discovery/matching band under the wavy world: a prediction within
 # +-WAVE_AMP of truth counts as band-correct for the consec gate, and a
 # candidate pair/rule within the band counts as reproduced for matching.

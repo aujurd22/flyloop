@@ -87,6 +87,35 @@ def parse_epireg(block: str):
     return pairs, ep
 
 
+P_RES = re.compile(r"res=(\d+),(\d+),(\d+),([\d,]*)::((?:\(\d+,\d+\))*)")
+P_RES_PT = re.compile(r"\((\d+),(\d+)\)")
+
+
+def parse_res_entry(block: str):
+    """W9C residual entry -> [(x, r), ...] (empty when absent/garbled)."""
+    if not block:
+        return []
+    m = P_RES.search(block)
+    if not m:
+        return []
+    xs = [t for t in m.group(4).split(",") if t != ""]
+    pts = P_RES_PT.findall(m.group(5))
+    return [(int(x), int(r)) for x, (_, r) in zip(xs, pts)]
+
+
+def wave_est(res, xp, a, p):
+    """W9C M5: anchor prediction to the nearest CONFIRMED RAW pair.
+    res = [(x, y), ...] observed pairs of this rule (wave included, exact
+    across visits). Returns (y_s - a*x_s) mod p so that
+    y_pred = (a*xp + wave_est) == (y_s + a*(xp-x_s)) mod p -- the fit's
+    constant pollution cancels algebraically; the residual error is only
+    the wave shape difference between x_s and xp (nearest-x -> small)."""
+    if not res:
+        return 0
+    x_s, y_s = min(res, key=lambda t: min((xp - t[0]) % p, (t[0] - xp) % p))
+    return (y_s - a * x_s) % p
+
+
 def book_test(cands, pairs, p: int):
     """Test book candidates against observed pairs; adopt only a UNIQUE match.
 
@@ -259,7 +288,7 @@ def predict_puzzle(entries, fam: int, epoch: int, xp: int):
 
 def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
                       cands=None, epi_cands=None, min_frac=None,
-                      epi_tol=None):
+                      epi_tol=None, res_map=None):
     """V4 hierarchy over PRE-FOLDED live observations (the current probe's
     revealed pair is already in `obs` — applies to ALL arms symmetrically).
     min_frac overrides C.MATCH_MIN_FRAC when set (V8 adaptive read policy).
@@ -279,11 +308,50 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
     """
     p = C.PUZ_P
     obs = list(obs or [])
+
+    def _res_pred(rid):
+        """W9C M5: full prediction from confirmed raw pairs, or None.
+        - exact-x hit: replay the stored true y verbatim (wave included).
+        - >=3 points: robust refit (true rule minimizes total band error in
+          the 13x13 space) + nearest-pair anchor, y = y_s + a*(xp-x_s).
+        - <3 points: underdetermined (2 points absorb the wave) -> None."""
+        if not (res_map and rid in res_map):
+            return None
+        pts = res_map[rid]
+        if not pts:
+            return None
+        for x, y in pts:
+            if x == xp % p:
+                return y
+        if len(pts) < 3:
+            return None
+        best_e = None
+        best = None
+        for aa in range(p):
+            for bb in range(p):
+                e = 0
+                for x, y in pts:
+                    d0 = (y - (aa * x + bb)) % p
+                    e += min(d0, p - d0)
+                if best_e is None or e < best_e:
+                    best_e = e
+                    best = (aa, bb)
+        aa, bb = best
+        x_s, y_s = min(pts, key=lambda t: min((xp - t[0]) % p,
+                                              (t[0] - xp) % p))
+        return (y_s + aa * ((xp - x_s) % p)) % p
+
     if cands:
         for rid, a, b, ep in cands:
             if ep == epoch:
+                y_r = _res_pred(rid)
+                if y_r is not None:
+                    return (y_r, "rule", 1, (a, b),
+                            {"rule_id": rid, "book_rank": 1,
+                             "n_book_matches": 1, "res_pred": 1})
                 return ((a * xp + b) % p, "rule", 1, (a, b),
-                        {"rule_id": rid, "book_rank": 1, "n_book_matches": 1})
+                        {"rule_id": rid, "book_rank": 1,
+                         "n_book_matches": 1, "res_pred": 0})
         test_cands = [r for r in cands if r[3] != epoch][:C.BOOK_TEST_K]
         if obs:
             rule, rank, n_m = book_test(test_cands, obs, p)
@@ -297,14 +365,24 @@ def predict_puzzle_v4(entries, fam: int, epoch: int, xp: int, obs,
                                              tol=C.WAVE_TOL)
                 if rule is not None:
                     rid, a, b, _ = rule
+                    y_r = _res_pred(rid)
+                    if y_r is not None:
+                        return (y_r, "book_test", 1, (a, b),
+                                {"rule_id": rid, "book_rank": rank,
+                                 "match_frac": round(frac, 3), "res_pred": 1})
                     return ((a * xp + b) % p, "book_test", 1, (a, b),
                             {"rule_id": rid, "book_rank": rank,
-                             "match_frac": round(frac, 3)})
+                             "match_frac": round(frac, 3), "res_pred": 0})
             if rule is not None:
                 rid, a, b, _ = rule
+                y_r = _res_pred(rid)
+                if y_r is not None:
+                    return (y_r, "book_test", 1, (a, b),
+                            {"rule_id": rid, "book_rank": rank,
+                             "n_book_matches": n_m, "res_pred": 1})
                 return ((a * xp + b) % p, "book_test", 1, (a, b),
                         {"rule_id": rid, "book_rank": rank,
-                         "n_book_matches": n_m})
+                         "n_book_matches": n_m, "res_pred": 0})
     if epi_cands and obs:
         epi_pool = [(pairs, ep) for pairs, ep in epi_cands if ep != epoch][
             :C.EPIREG_CAP]
