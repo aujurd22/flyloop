@@ -54,3 +54,21 @@ the table; the true replication (fresh RUNSEED) must precede any
 | M5 P1 "beat the plateau by a wide margin" | PARTIAL: significant, ~7% not ~50% |
 | M5 P2 "advantage grows with table fill" | SUPPORTED directionally (armed 75% vs unarmed 85%); scaling test queued |
 | M5 P3 "flip resistance via 2-of-2 confirmation" | HELD (0 poison events, 0 res_err) |
+
+---
+
+**REPLICATION RESOLVED (10-02 01:07).** W9D (fresh RUNSEED=20261001,
+independent realizations, diverges from W9C at event 0, 2979 cycles, 0
+failures): **FULL-RES advantage +1.208, CI [+0.526, +1.793]** — replicated,
+same direction, larger magnitude, 151 res-armed probes. Two independent
+realizations, both significant:
+
+| run | realizations | paired FULL−FULL-RES | verdict |
+|---|---|---|---|
+| W9C | same-seed (bit-identical control) | +0.804 CI[+0.244, +1.404] | SIG |
+| W9D | fresh-seed | +1.208 CI[+0.526, +1.793] | SIG |
+
+**M5 is ACCEPTED into the lineage** — the first accepted mutation on a new
+axis (storing the abstraction's own loss), and the first to pass the full
+G4-rule gauntlet: same-seed paired contrast + fresh-seed independent
+replication, both excluding zero. Lineage gen-6 upgraded.

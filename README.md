@@ -250,6 +250,26 @@ summary-only storage collapses retrieval contrast on residual-bearing
 content; measure the residual before compacting.
 [V9_DESIGN.md](V9_DESIGN.md), [W9A](findings/v9_w9a/FINDINGS.md)
 
+**W9C/W9D — M5 residual registry ACCEPTED**: the registered recovery ran
+and replicated under the full G4 gauntlet. W9C (same-seed paired against a
+bit-identical FULL control, 2685/2685 events): **+0.804 E20, CI
+[+0.244, +1.404]**. W9D (fresh realizations, diverges at event 0):
+**+1.208, CI [+0.526, +1.793]**. First accepted new-axis mutation (store
+the abstraction's own loss); recovery ~8-11% of the cliff, scaling lever =
+residual table density (W9D 74% vs 85% armed/unarmed probe errors).
+
+**V10 composite world** (SDB-aligned, P148's registered loop-closer):
+composition is the registry's killer feature — composite-rule RECALL E20
+**1.333 vs archive 5.222**, probe-1 hits 56% vs 7.7% random (answers
+unobserved R3 from stored R1, R2 = mechanical SDB TRANSFER). Periodicity
+REFUTED the predicted episodic win and bought a deeper law: **drift is the
+abstraction-loss type that punishes BOTH architectures** (all arms
+~6.2-6.8 vs 3.86 standard) — neither (a,b) nor instance replay carries
+(b0, δ, k); the missing representation is δ itself (registered mutation
+M6). Anomaly probes: ~90% error for all arms (unpredictable by design);
+memorization-rate join queued.
+[V10](findings/v10/FINDINGS.md), [W9C](findings/v9_w9c/FINDINGS.md)
+
 Full data, corrections, and next-step registrations:
 [V7A](findings/v7a_20260929_0242/FINDINGS.md),
 [V7B](findings/v7b_20260929_0447/FINDINGS.md),
