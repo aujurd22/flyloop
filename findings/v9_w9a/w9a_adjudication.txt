@@ -1,0 +1,26 @@
+=== V9 W9A adjudication (wave sweep pair 1: W=0 vs W=6) ===
+
+--- W=0 (runs/w9w0_20261001_1225), discovered rules: 107 ---
+  FULL     : E20 = 1.137 CI[0.780,1.565] n_ep=51
+  MATCHED  : E20 = 3.353 CI[2.500,4.333] n_ep=51
+  EPISODIC : E20 = 3.529 CI[2.686,4.500] n_ep=51
+  paired MATCHED-FULL: +2.216 CI[+1.521,+3.035] -> MATCHED WINS
+
+--- W=2 (runs/w9w2_20261001_1428), discovered rules: 68 ---
+  FULL     : E20 = 10.737 CI[8.944,12.629] n_ep=38
+  MATCHED  : E20 = 9.658 CI[8.000,11.457] n_ep=38
+  EPISODIC : E20 = 9.974 CI[8.216,11.781] n_ep=38
+  paired MATCHED-FULL: -1.079 CI[-1.585,-0.629] -> FULL WINS
+
+--- W=4 (runs/w9w4_20261001_1428), discovered rules: 98 ---
+  FULL     : E20 = 10.581 CI[8.975,12.296] n_ep=43
+  MATCHED  : E20 = 10.419 CI[8.870,12.083] n_ep=43
+  EPISODIC : E20 = 10.256 CI[8.729,11.881] n_ep=43
+  paired MATCHED-FULL: -0.163 CI[-0.814,+0.520] -> FULL WINS
+
+--- W=6 (runs/w9w6_20261001_1225), discovered rules: 128 ---
+  FULL     : E20 = 10.367 CI[8.765,11.932] n_ep=49
+  MATCHED  : E20 = 10.531 CI[9.000,12.098] n_ep=49
+  EPISODIC : E20 = 10.469 CI[8.898,12.037] n_ep=49
+  paired MATCHED-FULL: +0.163 CI[-0.413,+0.793] -> MATCHED WINS
+

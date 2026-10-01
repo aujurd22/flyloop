@@ -232,6 +232,24 @@ generalization is not one.
 [V8-LLM-2](findings/v8_llm_v2/FINDINGS.md),
 [V8-LLM-3](findings/v8_llm_v3/FINDINGS.md)
 
+**V9 W9A wave sweep** (the abstraction-loss axis): make the world's rules
+carry an incompressible per-rule sinusoid (amplitude W) that no compact
+(a, b) can reproduce. Result: not a gradual floor but an **abstraction
+cliff** — FULL falls 1.14 → ~10.5 (E20) the moment W > 0 and all three
+arms saturate together. Mechanism (method decomposition): the world's
+physical tolerance was coupled into discovery AND matching bands, and a
+band wide enough to forgive the world's residual destroys candidate
+contrast — wrong rules win argmax, the book fills with wave-fitted
+wrong rules (direct rule hits 427 → 29). MATCHED wins significantly at
+W=2 (the crossover), ties beyond. **Registered law: a tolerance wide
+enough to forgive the world's residual is wide enough to destroy
+identification.** Recoveries registered and queued (W9B: archive keeps
+tol=0 since its stored pairs stay exactly valid; M5: residual registry —
+abstraction with its own loss stored alongside). Product translation:
+summary-only storage collapses retrieval contrast on residual-bearing
+content; measure the residual before compacting.
+[V9_DESIGN.md](V9_DESIGN.md), [W9A](findings/v9_w9a/FINDINGS.md)
+
 Full data, corrections, and next-step registrations:
 [V7A](findings/v7a_20260929_0242/FINDINGS.md),
 [V7B](findings/v7b_20260929_0447/FINDINGS.md),
