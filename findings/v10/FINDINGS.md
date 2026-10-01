@@ -67,3 +67,14 @@ for W9*/V10 runs retroactively — events.jsonl has everything needed.
 3. Registered next: V10b (δ-field mutation M6, anomaly-memorization
    join, ICR counters) and W9D replication adjudication (M5's
    "accepted" decision).
+
+---
+
+**CORRECTION (10-02 04:50, V10b).** The P2 "composition transfer"
+interpretation is RETRACTED: composite RECALL probe-1s happen AFTER the
+rule's NEW episode observed it, so the 56% is ordinary registry advantage
+on a discovered rule — no unobserved structure was ever answered. The
+composite E20 asymmetry (1.333 vs 5.222) stands as registry-vs-archive;
+the transfer claim moves to M7 (preemptive derivation), whose budget
+sensitivity is where P-COMBO's evidence-chain law becomes testable. Full
+adjudication: findings/v10b/FINDINGS.md.

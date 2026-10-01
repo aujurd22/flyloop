@@ -1,0 +1,22 @@
+=== V10b E1: evidence-chain budget (BOOK_CAP=2 vs 5) ===
+
+--- CAP5 (V10) ---
+  FULL     standard  : E20  3.864 [2.250,5.857] n=22
+  FULL     periodic  : E20  6.154 [3.750,8.462] n=13
+  FULL     composite : E20  1.333 [0.750,2.000] n=9
+  MATCHED  standard  : E20  5.773 [4.087,7.667] n=22
+  MATCHED  periodic  : E20  6.846 [4.167,9.000] n=13
+  MATCHED  composite : E20  5.222 [2.300,10.429] n=9
+  FULL composite probe-1: 5/9 = 56%
+
+--- CAP2 (V10b) ---
+  FULL     standard  : E20  4.583 [3.091,6.318] n=24
+  FULL     periodic  : E20  5.625 [3.667,7.737] n=16
+  FULL     composite : E20  1.545 [0.900,2.300] n=11
+  MATCHED  standard  : E20  5.542 [3.950,7.318] n=24
+  MATCHED  periodic  : E20  6.188 [3.933,8.250] n=16
+  MATCHED  composite : E20  4.364 [1.786,8.600] n=11
+  FULL composite probe-1: 4/11 = 36%
+
+--- paired FULL composite E20 (CAP2 - CAP5) ---
+composite FULL degradation: +0.444 CI[+0.000,+1.000] n=9 (n.s.)
