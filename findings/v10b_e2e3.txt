@@ -1,0 +1,16 @@
+=== V10b E3/E2/ICR analysis (existing runs) ===
+
+--- E3: Arena profile of flyloop discoveries (V10 FULL) ---
+C (mdl_ratio, obs24/rule-entry): median 7.23 mean 6.55 n=82
+V (verification) = 1 by construction (consec-3 gate)
+N (novelty)     = 1 by construction (first DISCOVERY, fresh rid)
+T (RECALL E20 improvement vs EPISODIC): mean +2.16 n=32 (21/32 rules positive)
+flymemory consolidation baseline: C 1.10 / N 0.13 / T 0.00 (P-DISCOVERY: 'not insight')
+
+--- ICR (SDB bit convention) ---
+FULL      : ICR ~1.7 (stored 15641 B)
+MATCHED   : ICR ~1.6 (stored 17341 B)
+EPISODIC  : ICR ~0.8 (stored 32982 B)
+
+--- E2: Polanyi gap (W9C FULL-RES store, stated vs operative) ---
+registry entries with >=3 confirmed pairs: 0; stated==operative(+-1): 0; POLANYI GAP (stated wrong): 0 []

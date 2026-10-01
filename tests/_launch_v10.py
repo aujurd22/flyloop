@@ -11,7 +11,8 @@ def free_port():
 
 SMOKE = os.environ.get("V10_SMOKE", "0") == "1"
 ts = time.strftime("%Y%m%d_%H%M")
-tag = "v10smoke" if SMOKE else "v10"
+cap = os.environ.get("V10_BOOK_CAP", "5")
+tag = ("v10smoke" if SMOKE else "v10") + ("" if cap == "5" else f"_cap{cap}")
 run_dir = os.path.join(C.ROOT, "runs", f"{tag}_{ts}")
 os.makedirs(run_dir, exist_ok=True)
 ports = [free_port() for _ in range(3)]
@@ -25,6 +26,7 @@ envs = {
     "FLYLOOP_MATCH_MIN_FRAC": "0.6",
     "FLYLOOP_PREDSET": "V4",
     "FLYLOOP_COMPOSITE": "1",
+    "FLYLOOP_BOOK_CAP": os.environ.get("V10_BOOK_CAP", "5"),
     "FLYLOOP_MAX_CYCLES": "800" if SMOKE else "30000",
 }
 pf = subprocess.run([sys.executable, "-m", "tests.preflight",
