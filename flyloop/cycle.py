@@ -393,12 +393,17 @@ class CycleRunner:
                 tag = FAM_TAGS[fam]
                 text_d = (f"{BOOK_TAG} {tag}推演 c={c} :: "
                           f"{tag}r{rid_d.split('r')[1]}={a_d}x{b_d}e{epoch}")
-                await self._remember(
+                resp_d, ok_d = await self._remember(
                     text_d, tags="flyloop,derived,rule",
                     compartment=C.COMPARTMENT_RULE,
                     state_key=derived_state_key(fam),
-                    state_value=f"e{epoch}", force_new=False)
-                self.counts["derived_writes"] =                     self.counts.get("derived_writes", 0) + 1
+                    state_value=f"e{epoch}", force_new=True)
+                if ok_d:
+                    self.counts["derived_writes"] =                         self.counts.get("derived_writes", 0) + 1
+                else:
+                    self.counts["derived_write_fails"] =                         self.counts.get("derived_write_fails", 0) + 1
+                    self.derived_rids.discard(rid_d)
+                    rec["notes"].append(f"derived_write_fail:{resp_d}")
 
         # V4 interface fix (applied to ALL arms identically): the current
         # probe's revealed pair is folded into the live observations BEFORE
@@ -462,11 +467,14 @@ class CycleRunner:
                     # budget-free) joins the candidate list
                     blk_d, _ = await self.mem.state_lookup(derived_state_key(fam))
                     d_rule = parse_derived(blk_d or "")
+                    self.counts["derived_lookups"] =                         self.counts.get("derived_lookups", 0) + 1
                     if d_rule:
+                        self.counts["derived_lookup_hits"] =                             self.counts.get("derived_lookup_hits", 0) + 1
                         rn, a_d, b_d, ep_d = d_rule
                         rid_d = f"f{fam}r{rn}"
                         if all(r[0] != rid_d for r in cands):
                             cands.append((rid_d, a_d, b_d, ep_d))
+                            self.counts["derived_cand_added"] =                                 self.counts.get("derived_cand_added", 0) + 1
         elif self.arm in ("MATCHED", "MATCHED-VER", "MATCHED-EXACT"):
             # exact state_lookup over the runner's own archive index (RAM
             # mirror of written keys) — similarity-based recall would rank
