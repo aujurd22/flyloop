@@ -80,11 +80,13 @@ def book_text_v3(fam, rules, c):
     """One family's book entry: rules = {rid: {"a","b","ep"}} (capped at
     BOOK_CAP most recent). Distinct CJK head + a family tag on every rule
     line keeps cross-family and book-vs-table similarity below the merge
-    line (calibrated, see BOOK_HEADS note)."""
+    line (calibrated, see BOOK_HEADS note). M7: derived rules carry a d1
+    suffix (P_BOOK3 tolerates trailing chars)."""
     parts = []
     for rid in sorted(rules[fam], key=lambda r: -rules[fam][r]["ep"])[:C.BOOK_CAP]:
         r = rules[fam][rid]
-        parts.append(f"{FAM_TAGS[fam]}r{rid.split('r')[1]}={r['a']}x{r['b']}e{r['ep']}")
+        parts.append(f"{FAM_TAGS[fam]}r{rid.split('r')[1]}={r['a']}x{r['b']}e{r['ep']}"
+                     + ("d1" if r.get("derived") else ""))
     return f"{BOOK_HEADS[fam]} c={c} :: " + " ".join(parts)
 
 
@@ -165,6 +167,7 @@ class CycleRunner:
         self.res_seen = {}   # {fam: {rid: {x: {r: count}}}}
         self.res_conf = {}   # {fam: {rid: {x: r}}}
         self.res_last = {}   # {(fam, rid): last written keep-list}
+        self.derived_rids = set()   # M7: preemptively derived rule ids
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
         self.flip_hist = deque(maxlen=20)  # V8 adaptive: rolling book_test outcomes
@@ -347,6 +350,33 @@ class CycleRunner:
             d["ep_counted"] = True
             self.counts["episodes"][wep["type"]] += 1
 
+        # M7 (V10c): preemptive composition inference -- a fresh episode
+        # whose rule is NOT in the book but whose family holds >=2 rules
+        # gets a DERIVED candidate from the two most recent:
+        # R_new = (a1+a2, b2-b1) with r1 most recent. Blind capability
+        # (all families derive; poison cost measured); the derived entry
+        # faces the same verification gate as any rule and is overwritten
+        # by observation when wrong.
+        if (self.arm == "FULL-COMP" and d["probes"] == 0
+                and wep["rule_id"] not in self.book.get(fam, {})):
+            fam_rules = self.book.get(fam, {})
+            if len(fam_rules) >= 2:
+                r1, r2 = sorted(fam_rules.items(),
+                                key=lambda kv: -kv[1]["ep"])[:2]
+                a_d = (r1[1]["a"] + r2[1]["a"]) % C.PUZ_P
+                b_d = (r2[1]["b"] - r1[1]["b"]) % C.PUZ_P
+                rid_d = wep["rule_id"]
+                fam_rules[rid_d] = {"a": a_d, "b": b_d, "ep": epoch,
+                                    "derived": True}
+                self.derived_rids.add(rid_d)
+                text_d = book_text_v3(fam, self.book, c)
+                await self._remember(
+                    text_d, tags="flyloop,derived,rule",
+                    compartment=C.COMPARTMENT_RULE,
+                    state_key=book_state_key(fam),
+                    state_value=f"n{len(fam_rules)}", force_new=False)
+                self.counts["derived_writes"] =                     self.counts.get("derived_writes", 0) + 1
+
         # V4 interface fix (applied to ALL arms identically): the current
         # probe's revealed pair is folded into the live observations BEFORE
         # prediction — in V3 it landed after, blinding probe 1 by artifact.
@@ -371,7 +401,8 @@ class CycleRunner:
         entries = parse_recall(block_t)
         cands = None
         epi_cands = None
-        if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES"):
+        if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES",
+                             "FULL-COMP"):
             # RSI-0 G2 perrule mode: exact state_lookup over the runner's own
             # rule index (RAM mirror), same pattern as the MATCHED archive
             cands = []
@@ -449,7 +480,7 @@ class CycleRunner:
             epi_tol=0 if self.arm == "MATCHED-EXACT" else None,
             res_map=res_map)
 
-        stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES") else \
+        stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES", "FULL-COMP") else \
             any(int(m.group(5)) != epoch for m in
                 [reasoner.P_PAIRS.search(t) for _, t in entries]
                 if m and int(m.group(2)) == fam)
@@ -463,6 +494,8 @@ class CycleRunner:
                    prediction=y, truth=truth, error=err,
                    method=method, retrieval_rank=aux.get("book_rank", aux.get("epi_rank")),
                    anomaly=int(world.puz_anomaly(fam, c)),
+                   derived_use=int(method in ("rule", "book_test")
+                                  and aux.get("rule_id") in self.derived_rids),
                    res_pred=aux.get("res_pred"),
                    stale_candidate_present=int(bool(stale_present)),
                    stale_intrusion=stale_intrusion,
@@ -564,7 +597,8 @@ class CycleRunner:
         if d["consec"] >= C.PUZ_DISC_CONSEC:
             d["verified"] = True
         disc_gate = 1 if self.arm == "FULL-RAW" else C.PUZ_DISC_CONSEC
-        if (self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES") and d["consec"] >= disc_gate
+        if (self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES",
+                             "FULL-COMP") and d["consec"] >= disc_gate
                 and not d["done"] and ab):
             d["done"] = True
             a, b = ab
@@ -632,7 +666,8 @@ class CycleRunner:
             rec["reactivation"] = is_reactivation
             rec["insight_kind"] = kind
             rec["notes"].append(
-                f"{kind} fam={fam} ep={epoch} rid={rid} a={a} b={b}")
+                f"{kind} fam={fam} ep={epoch} rid={rid} a={a} b={b}"
+                + (" derived" if rid in self.derived_rids else ""))
             self.log(f"[c{c}] INSIGHT {kind} fam={fam}({word}) ep={epoch} rid={rid} "
                      f"y=({a}x+{b}) mod {C.PUZ_P} (book has "
                      f"{sum(len(v) for v in self.book.values())} rules)")

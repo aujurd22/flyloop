@@ -75,11 +75,26 @@ def ensure_service(port: int, db_path: str, timeout=90):
     tlog("[service] WARNING: port still down; worker will degrade to local mirror")
 
 
+def service_ports():
+    """(port, db_name, tag) per arm. FLYLOOP_PORTS (comma list aligned with
+    FLYLOOP_ARMS) overrides the legacy trio -- the count MUST match the arm
+    list or extra arms connect-timeout at worker start (V10c smoke)."""
+    ports_env = os.environ.get("FLYLOOP_PORTS", "")
+    if ports_env:
+        arms = [a for a in os.environ.get("FLYLOOP_ARMS", "").split(",") if a]
+        ports = [p for p in ports_env.split(",") if p]
+        return [(int(port), f"mem_{(arms[i] if i < len(arms) else f'arm{i}')}.pkl",
+                 (arms[i] if i < len(arms) else f"arm{i}"))
+                for i, port in enumerate(ports)]
+    return [(C.MEM_PORT, "mem_FULL.pkl", "FULL"),
+            (C.MEM_PORT_MATCHED, "mem_MATCHED.pkl", "MATCHED"),
+            (C.MEM_PORT_EPI, "mem_EPI.pkl", "EPI")]
+
+
 def ensure_services(run_dir):
-    """One store per memory arm (v4): FULL / MATCHED / EPISODIC."""
-    ensure_service(C.MEM_PORT, os.path.join(run_dir, "mem_FULL.pkl"))
-    ensure_service(C.MEM_PORT_MATCHED, os.path.join(run_dir, "mem_MATCHED.pkl"))
-    ensure_service(C.MEM_PORT_EPI, os.path.join(run_dir, "mem_EPI.pkl"))
+    """One store per memory arm (v4)."""
+    for port, dbf, _tag in service_ports():
+        ensure_service(port, os.path.join(run_dir, dbf))
 
 
 def finalize(run_dir, duration_h):
@@ -137,10 +152,15 @@ def main():
             continue
 
         tlog(f"[supervisor] starting worker (restart #{restarts})")
+        # worker output MUST be captured: with no redirect under
+        # CREATE_NO_WINDOW the child's stderr is an invalid handle and a
+        # startup traceback vanishes (V10c smoke lost ~40min to this).
+        wlog = open(os.path.join(run_dir, "worker.log"), "a", encoding="utf-8")
         proc = subprocess.Popen(
             [C.PYTHON, "-m", "flyloop.worker", "--run-dir", run_dir,
              "--duration-h", str(args.duration_h)],
-            cwd=C.ROOT, creationflags=CREATE_NO_WINDOW, close_fds=True)
+            cwd=C.ROOT, creationflags=CREATE_NO_WINDOW, close_fds=True,
+            stdout=wlog, stderr=wlog)
         stop_written = os.path.exists(stop_path)
         while proc.poll() is None:
             time.sleep(5)
@@ -155,9 +175,7 @@ def main():
                 break
             if time.time() - last_service_check > 20:
                 last_service_check = time.time()
-                for port, dbf, tag in ((C.MEM_PORT, "mem_FULL.pkl", "FULL"),
-                                       (C.MEM_PORT_MATCHED, "mem_MATCHED.pkl", "MATCHED"),
-                                       (C.MEM_PORT_EPI, "mem_EPI.pkl", "EPI")):
+                for port, dbf, tag in service_ports():
                     if not port_open(C.MEM_HOST, port):
                         tlog(f"[service] {tag} down mid-run; respawning (idempotent)")
                         spawn_service(port, os.path.join(run_dir, dbf))

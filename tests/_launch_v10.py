@@ -15,14 +15,15 @@ cap = os.environ.get("V10_BOOK_CAP", "5")
 tag = ("v10smoke" if SMOKE else "v10") + ("" if cap == "5" else f"_cap{cap}")
 run_dir = os.path.join(C.ROOT, "runs", f"{tag}_{ts}")
 os.makedirs(run_dir, exist_ok=True)
-ports = [free_port() for _ in range(3)]
+n_arms = len(os.environ.get("V10_ARMS", "FULL,MATCHED,EPISODIC").split(","))
+ports = [free_port() for _ in range(n_arms)]
 envs = {
     "FLYLOOP_PORTS": ",".join(str(x) for x in ports),
     "FLYLOOP_PORT": str(ports[0]),
     "FLYLOOP_PORT_MATCHED": str(ports[1]),
     "FLYLOOP_PORT_EPI": str(ports[2]),
     "FLYLOOP_NOISE_EPS": "0.25",
-    "FLYLOOP_ARMS": "FULL,MATCHED,EPISODIC",
+    "FLYLOOP_ARMS": os.environ.get("V10_ARMS", "FULL,MATCHED,EPISODIC"),
     "FLYLOOP_MATCH_MIN_FRAC": "0.6",
     "FLYLOOP_PREDSET": "V4",
     "FLYLOOP_COMPOSITE": "1",
