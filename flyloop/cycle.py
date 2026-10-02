@@ -83,20 +83,30 @@ def book_text_v3(fam, rules, c):
     line (calibrated, see BOOK_HEADS note). M7: derived rules carry a d1
     suffix (P_BOOK3 tolerates trailing chars)."""
     parts = []
-    # M7.1: derived entries are BUDGET-FREE -- they sort after every real
-    # rule (evict-first), so a preemptive candidate can answer first
-    # probes without displacing observed rules from the BOOK_CAP window.
-    for rid in sorted(rules[fam],
-                      key=lambda r: (rules[fam][r].get("derived", False),
-                                     -rules[fam][r]["ep"]))[:C.BOOK_CAP]:
+    for rid in sorted(rules[fam], key=lambda r: -rules[fam][r]["ep"])[:C.BOOK_CAP]:
         r = rules[fam][rid]
-        parts.append(f"{FAM_TAGS[fam]}r{rid.split('r')[1]}={r['a']}x{r['b']}e{r['ep']}"
-                     + ("d1" if r.get("derived") else ""))
+        parts.append(f"{FAM_TAGS[fam]}r{rid.split('r')[1]}={r['a']}x{r['b']}e{r['ep']}")
     return f"{BOOK_HEADS[fam]} c={c} :: " + " ".join(parts)
 
 
 def book_state_key(fam):
     return C.BOOK_STATE_KEY.format(fam=fam)
+
+
+def derived_state_key(fam):
+    return f"flyloop/book/{fam}/derived"
+
+
+def parse_derived(block: str):
+    """M7.2 derived candidate entry -> (rid, a, b, ep) or None."""
+    import re as _re
+    if not block:
+        return None
+    m = _re.search(r"[红蓝金银]家r(\d+)=(\d+)x(\d+)e(\d+)", block)
+    if not m:
+        return None
+    rn, a, b, ep = (int(m.group(i)) for i in range(1, 5))
+    return (f"f?r{rn}", a, b, ep)
 
 
 def book_rule_text(fam, rid, r, c):
@@ -173,6 +183,7 @@ class CycleRunner:
         self.res_conf = {}   # {fam: {rid: {x: r}}}
         self.res_last = {}   # {(fam, rid): last written keep-list}
         self.derived_rids = set()   # M7: preemptively derived rule ids
+        self.derived_params = {}    # M7.2: {fam: (rid, a, b, ep)} live candidate
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
         self.flip_hist = deque(maxlen=20)  # V8 adaptive: rolling book_test outcomes
@@ -371,22 +382,22 @@ class CycleRunner:
                 a_d = (r1[1]["a"] + r2[1]["a"]) % C.PUZ_P
                 b_d = (r2[1]["b"] - r1[1]["b"]) % C.PUZ_P
                 rid_d = wep["rule_id"]
-                # M7.1: at most one live derived entry per family -- the
-                # new derivation replaces the stale one (they are
-                # budget-free, but unbounded stale candidates would
-                # crowd the matcher's candidate list).
-                for old_rid in [r for r in fam_rules
-                                if fam_rules[r].get("derived")]:
-                    del fam_rules[old_rid]
-                fam_rules[rid_d] = {"a": a_d, "b": b_d, "ep": epoch,
-                                    "derived": True}
+                # M7.2: the derived candidate lives in its OWN store slot
+                # (never in the budgeted book text -- M7.1's evict-first
+                # sort meant it was never stored once families filled, and
+                # its ep=epoch stamp poisoned non-composite families while
+                # it did persist). One key per family, overwritten each
+                # derivation; read as an EXTRA candidate by the read path.
                 self.derived_rids.add(rid_d)
-                text_d = book_text_v3(fam, self.book, c)
+                self.derived_params[fam] = (rid_d, a_d, b_d, epoch)
+                tag = FAM_TAGS[fam]
+                text_d = (f"{BOOK_TAG} {tag}推演 c={c} :: "
+                          f"{tag}r{rid_d.split('r')[1]}={a_d}x{b_d}e{epoch}")
                 await self._remember(
                     text_d, tags="flyloop,derived,rule",
                     compartment=C.COMPARTMENT_RULE,
-                    state_key=book_state_key(fam),
-                    state_value=f"n{len(fam_rules)}", force_new=False)
+                    state_key=derived_state_key(fam),
+                    state_value=f"e{epoch}", force_new=False)
                 self.counts["derived_writes"] =                     self.counts.get("derived_writes", 0) + 1
 
         # V4 interface fix (applied to ALL arms identically): the current
@@ -446,6 +457,16 @@ class CycleRunner:
                 self.counts["recalls"] += 1
                 registry = reasoner.parse_book_v3(block_b, fam)
                 cands = reasoner.book_candidates(registry, C.BOOK_CAP)
+                if self.arm == "FULL-COMP":
+                    # M7.2: the family's derived candidate (own store slot,
+                    # budget-free) joins the candidate list
+                    blk_d, _ = await self.mem.state_lookup(derived_state_key(fam))
+                    d_rule = parse_derived(blk_d or "")
+                    if d_rule:
+                        rn, a_d, b_d, ep_d = d_rule
+                        rid_d = f"f{fam}r{rn}"
+                        if all(r[0] != rid_d for r in cands):
+                            cands.append((rid_d, a_d, b_d, ep_d))
         elif self.arm in ("MATCHED", "MATCHED-VER", "MATCHED-EXACT"):
             # exact state_lookup over the runner's own archive index (RAM
             # mirror of written keys) — similarity-based recall would rank
