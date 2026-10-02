@@ -83,7 +83,12 @@ def book_text_v3(fam, rules, c):
     line (calibrated, see BOOK_HEADS note). M7: derived rules carry a d1
     suffix (P_BOOK3 tolerates trailing chars)."""
     parts = []
-    for rid in sorted(rules[fam], key=lambda r: -rules[fam][r]["ep"])[:C.BOOK_CAP]:
+    # M7.1: derived entries are BUDGET-FREE -- they sort after every real
+    # rule (evict-first), so a preemptive candidate can answer first
+    # probes without displacing observed rules from the BOOK_CAP window.
+    for rid in sorted(rules[fam],
+                      key=lambda r: (rules[fam][r].get("derived", False),
+                                     -rules[fam][r]["ep"]))[:C.BOOK_CAP]:
         r = rules[fam][rid]
         parts.append(f"{FAM_TAGS[fam]}r{rid.split('r')[1]}={r['a']}x{r['b']}e{r['ep']}"
                      + ("d1" if r.get("derived") else ""))
@@ -366,6 +371,13 @@ class CycleRunner:
                 a_d = (r1[1]["a"] + r2[1]["a"]) % C.PUZ_P
                 b_d = (r2[1]["b"] - r1[1]["b"]) % C.PUZ_P
                 rid_d = wep["rule_id"]
+                # M7.1: at most one live derived entry per family -- the
+                # new derivation replaces the stale one (they are
+                # budget-free, but unbounded stale candidates would
+                # crowd the matcher's candidate list).
+                for old_rid in [r for r in fam_rules
+                                if fam_rules[r].get("derived")]:
+                    del fam_rules[old_rid]
                 fam_rules[rid_d] = {"a": a_d, "b": b_d, "ep": epoch,
                                     "derived": True}
                 self.derived_rids.add(rid_d)
