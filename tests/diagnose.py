@@ -108,6 +108,10 @@ def main():
                 f"book_writes={c.get('book_writes', 0)}")
 
     # 5. custom gates
+    #    EVENT_FIELDS live in events.jsonl (per-record flags, e.g.
+    #    derived_use) -- they are NOT runner counters; counting them from
+    #    state.json reads 0 forever (V10g false FAIL at 0.49h).
+    EVENT_FIELDS = {"derived_use", "anomaly", "res_pred"}
     frac = elapsed_h if elapsed_h is not None else 0.0
     for g in args.gate:
         m = re.match(r"(\w+)>(\d+)@([\d.]+)", g)
@@ -117,8 +121,16 @@ def main():
         cname, thr, gate_frac = m.group(1), int(m.group(2)), float(m.group(3))
         if frac < gate_frac:
             continue  # gate not yet due
-        val = sum((c.get(cname, 0) or 0) for c in counts.values()) \
-            if counts else 0
+        if cname in EVENT_FIELDS:
+            val = 0
+            ev = os.path.join(rd, "events.jsonl")
+            if os.path.exists(ev):
+                with open(ev, encoding="utf-8") as ef:
+                    for line in ef:
+                        if f'"{cname}": 1' in line:
+                            val += 1
+        else:
+            val = sum((c.get(cname, 0) or 0) for c in counts.values())
         if val <= thr:
             fails.append(f"gate {cname}={val} at {frac:.2f}h "
                          f"(needed >{thr} past {gate_frac})")
