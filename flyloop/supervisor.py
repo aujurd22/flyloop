@@ -162,6 +162,9 @@ def main():
             cwd=C.ROOT, creationflags=CREATE_NO_WINDOW, close_fds=True,
             stdout=wlog, stderr=wlog)
         stop_written = os.path.exists(stop_path)
+        start_ts = time.time()
+        duration_s = args.duration_h * 3600
+        quarters_done = 0
         while proc.poll() is None:
             time.sleep(5)
             if not stop_written and time.time() >= deadline:
@@ -175,6 +178,30 @@ def main():
                 break
             if time.time() - last_service_check > 20:
                 last_service_check = time.time()
+                # quarter-mark diagnostics (operator directive 10-02):
+                # at 25/50/75% of the horizon, run the run-health checks
+                # and surface the result -- catches dead machinery at the
+                # quarter mark instead of at adjudication.
+                frac = (time.time() - start_ts) / max(duration_s, 1)
+                for q in (0.25, 0.5, 0.75):
+                    if frac >= q and quarters_done < int(q * 4):
+                        quarters_done += 1
+                        rdiag = subprocess.run(
+                            [sys.executable, os.path.join(
+                                C.ROOT, "tests", "diagnose.py"),
+                             "--run-dir", run_dir],
+                            cwd=C.ROOT, capture_output=True, text=True,
+                            creationflags=CREATE_NO_WINDOW)
+                        tlog(f"[diag {int(q*100)}%] rc={rdiag.returncode} "
+                             + " | ".join(l for l in
+                                          (rdiag.stdout or "").splitlines()
+                                          if l.startswith(("FAIL", "WARN")))
+                             + (" PASS" if rdiag.returncode == 0 else ""))
+                        with open(os.path.join(run_dir, "diag.md"), "a",
+                                  encoding="utf-8") as df:
+                            df.write(f"## {int(q*100)}% "
+                                     f"({time.strftime('%H:%M')})\n\n"
+                                     + (rdiag.stdout or "") + "\n")
                 for port, dbf, tag in service_ports():
                     if not port_open(C.MEM_HOST, port):
                         tlog(f"[service] {tag} down mid-run; respawning (idempotent)")
