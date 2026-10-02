@@ -463,10 +463,18 @@ class CycleRunner:
                 registry = reasoner.parse_book_v3(block_b, fam)
                 cands = reasoner.book_candidates(registry, C.BOOK_CAP)
                 if self.arm == "FULL-COMP":
-                    # M7.2: the family's derived candidate (own store slot,
-                    # budget-free) joins the candidate list
-                    blk_d, _ = await self.mem.state_lookup(derived_state_key(fam))
-                    d_rule = parse_derived(blk_d or "")
+                    # M7.2: the family's derived candidate joins the
+                    # candidate list. Read from the RAM mirror when this
+                    # runner wrote it (saves an HTTP round-trip per probe);
+                    # fall back to the store for rules written before a
+                    # resume.
+                    dp = self.derived_params.get(fam)
+                    if dp is not None:
+                        d_rule = (dp[0], dp[1], dp[2], dp[3])
+                    else:
+                        blk_d, _ = await self.mem.state_lookup(
+                            derived_state_key(fam))
+                        d_rule = parse_derived(blk_d or "")
                     self.counts["derived_lookups"] =                         self.counts.get("derived_lookups", 0) + 1
                     if d_rule:
                         self.counts["derived_lookup_hits"] =                             self.counts.get("derived_lookup_hits", 0) + 1
