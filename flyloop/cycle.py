@@ -182,7 +182,9 @@ class CycleRunner:
         self.res_seen = {}   # {fam: {rid: {x: {r: count}}}}
         self.res_conf = {}   # {fam: {rid: {x: r}}}
         self.res_last = {}   # {(fam, rid): last written keep-list}
-        self.derived_rids = set()   # M7: preemptively derived rule ids
+        self.derived_rids = set()   # M7: rids ever derived (insight-note tag
+                                    # only; derived_use uses derived_params,
+                                    # see the M7.3 flag site)
         self.derived_params = {}    # M7.2: {fam: (rid, a, b, ep)} live candidate
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
@@ -192,6 +194,7 @@ class CycleRunner:
                        "fact_writes": 0, "pair_writes": 0, "book_writes": 0,
                        "book_bytes": 0, "epireg_writes": 0, "epireg_bytes": 0,
                        "pad_writes": 0, "pad_bytes": 0,
+                       "derived_writes": 0, "derived_write_fails": 0,
                        "rejected": 0, "cold": 0,
                        "fact_readback_fail": 0, "rulebook_readback_fail": 0,
                        "table_readback_fail": 0,
@@ -536,6 +539,18 @@ class CycleRunner:
         err = 1 if (y is None or y != truth) else 0
         stale_intrusion = int(err == 1 and method in
                               ("book_test", "epi_test", "fit_stale", "rule"))
+        # M7.3 per-answer derived flag: 1 only when the answer actually came
+        # from THIS episode's live derived candidate -- method is rule /
+        # book_test, the aux rule_id equals the family's live derived rid AND
+        # that candidate was derived for the current epoch (dp[3]). The old
+        # ever-derived set (derived_rids) kept flagging every later probe of
+        # a once-derived rid -- post-discovery book hits, RECALL re-runs of
+        # the same rid -- polluting the composition-transfer metric.
+        dp = self.derived_params.get(fam)
+        derived_use = int(method in ("rule", "book_test")
+                          and dp is not None
+                          and dp[0] == aux.get("rule_id")
+                          and dp[3] == epoch)
         rec.update(lane="puzzle",
                    episode_type=wep["type"], family=fam, epoch=epoch,
                    rule_id=wep["rule_id"], rule_age=(wep["gap"] if wep["type"] == "RECALL" else 0),
@@ -543,8 +558,7 @@ class CycleRunner:
                    prediction=y, truth=truth, error=err,
                    method=method, retrieval_rank=aux.get("book_rank", aux.get("epi_rank")),
                    anomaly=int(world.puz_anomaly(fam, c)),
-                   derived_use=int(method in ("rule", "book_test")
-                                  and aux.get("rule_id") in self.derived_rids),
+                   derived_use=derived_use,
                    res_pred=aux.get("res_pred"),
                    stale_candidate_present=int(bool(stale_present)),
                    stale_intrusion=stale_intrusion,
