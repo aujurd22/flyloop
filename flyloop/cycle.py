@@ -189,6 +189,9 @@ class CycleRunner:
                                     # only; derived_use uses derived_params,
                                     # see the M7.3 flag site)
         self.derived_params = {}    # M7.2: {fam: (rid, a, b, ep)} live candidate
+        self.ep_hist = {}           # M7.5: {fam: deque([(a,b), ...])} last
+                                    # identified episodes (multiset, maxlen 2)
+        self.ep_hist_seen = set()   # {(fam, epoch)} already pushed
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
         self.flip_hist = deque(maxlen=20)  # V8 adaptive: rolling book_test outcomes
@@ -381,12 +384,24 @@ class CycleRunner:
         # by observation when wrong.
         if (self.arm == "FULL-COMP" and d["probes"] == 0
                 and wep["rule_id"] not in self.book.get(fam, {})):
-            fam_rules = self.book.get(fam, {})
-            if len(fam_rules) >= 2:
-                r1, r2 = sorted(fam_rules.items(),
-                                key=lambda kv: -kv[1]["ep"])[:2]
-                a_d = (r1[1]["a"] + r2[1]["a"]) % C.PUZ_P
-                b_d = (r2[1]["b"] - r1[1]["b"]) % C.PUZ_P
+            a_d = b_d = None
+            if C.DERIVE_EPISODES:
+                # M7.5: world composes EPISODE slots ep[i-2], ep[i-1]
+                # (RECALL episodes occupy slots); compose the last two
+                # identified episodes instead of deduped book rules.
+                hist = self.ep_hist.get(fam)
+                if hist is not None and len(hist) == 2:
+                    (a2, b2), (a1, b1) = hist[0], hist[1]
+                    a_d = (a2 + a1) % C.PUZ_P
+                    b_d = (b2 - b1) % C.PUZ_P
+            else:
+                fam_rules = self.book.get(fam, {})
+                if len(fam_rules) >= 2:
+                    r1, r2 = sorted(fam_rules.items(),
+                                    key=lambda kv: -kv[1]["ep"])[:2]
+                    a_d = (r1[1]["a"] + r2[1]["a"]) % C.PUZ_P
+                    b_d = (r2[1]["b"] - r1[1]["b"]) % C.PUZ_P
+            if a_d is not None:
                 rid_d = wep["rule_id"]
                 # M7.2: the derived candidate lives in its OWN store slot
                 # (never in the budgeted book text -- M7.1's evict-first
@@ -604,6 +619,17 @@ class CycleRunner:
             self.counts["cold"] += 1
         if err:
             rec["notes"].append(f"puz:{y}!={truth}({method})")
+
+        # M7.5: record the episode's rule once identified (present in book) --
+        # the DERIVE_EPISODES variant composes the last two identified
+        # EPISODES (multiset, RECALL repeats included), matching the world's
+        # episode-slot composition ep[i-2], ep[i-1].
+        if self.arm == "FULL-COMP":
+            br = self.book.get(fam, {}).get(wep["rule_id"])
+            if br is not None and (fam, epoch) not in self.ep_hist_seen:
+                self.ep_hist_seen.add((fam, epoch))
+                self.ep_hist.setdefault(
+                    fam, deque(maxlen=2)).append((br["a"], br["b"]))
 
         # table fold-in write (all arms, identical cadence)
         if err or d["unseen_since_write"] >= C.TABLE_WRITE_EVERY:

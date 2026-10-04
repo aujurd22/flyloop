@@ -159,6 +159,11 @@ RES_CAP = int(os.environ.get("FLYLOOP_RES_CAP", "4"))
 COMPOSITE = os.environ.get("FLYLOOP_COMPOSITE", "0") == "1"
 PERIODIC_FAM = 1
 COMPOSITE_FAM = 2
+# M7.5: compose the last two identified EPISODES (multiset, RECALL repeats
+# included) instead of the two most-recent distinct book rules. The world
+# composes episode slots ep[i-2], ep[i-1]; a RECALL interleave makes the
+# deduped-book selection diverge (v10i finding).
+DERIVE_EPISODES = os.environ.get("FLYLOOP_DERIVE_EPISODES", "0") == "1"
 ANOMALY_P = float(os.environ.get("FLYLOOP_ANOMALY_P", "0.03"))
 # discovery/matching band under the wavy world: a prediction within
 # +-WAVE_AMP of truth counts as band-correct for the consec gate, and a
