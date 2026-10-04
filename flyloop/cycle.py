@@ -106,7 +106,10 @@ def parse_derived(block: str):
     if not m:
         return None
     rn, a, b, ep = (int(m.group(i)) for i in range(1, 5))
-    return (f"f?r{rn}", a, b, ep)
+    # bare rule number: the caller prefixes the family (f"f{fam}r{rn}").
+    # Returning "f?r{rn}" here led the caller to double-prefix and the
+    # candidate to enter cands under a mangled rid (M7.3 root cause).
+    return (rn, a, b, ep)
 
 
 def book_rule_text(fam, rid, r, c):
@@ -481,8 +484,16 @@ class CycleRunner:
                     self.counts["derived_lookups"] =                         self.counts.get("derived_lookups", 0) + 1
                     if d_rule:
                         self.counts["derived_lookup_hits"] =                             self.counts.get("derived_lookup_hits", 0) + 1
-                        rn, a_d, b_d, ep_d = d_rule
-                        rid_d = f"f{fam}r{rn}"
+                        if dp is not None:
+                            # mirror path: dp[0] is already the full rid --
+                            # prefixing again produced f3r+f3r2="f3rf3r2",
+                            # the M7.3 root cause (mangled rid in cands,
+                            # flag's dp[0]==aux comparison always false)
+                            rid_d, a_d, b_d, ep_d = d_rule
+                        else:
+                            # store path: d_rule[0] is the bare rule number
+                            rn, a_d, b_d, ep_d = d_rule
+                            rid_d = f"f{fam}r{rn}"
                         if all(r[0] != rid_d for r in cands):
                             cands.append((rid_d, a_d, b_d, ep_d))
                             self.counts["derived_cand_added"] =                                 self.counts.get("derived_cand_added", 0) + 1
@@ -564,6 +575,21 @@ class CycleRunner:
                    stale_intrusion=stale_intrusion,
                    discovery=False, reactivation=False, insight_kind=None,
                    useful_insight=None)
+        # M7.3 early-return trace: on composite NEW probe-1 with a live
+        # derived candidate, log exactly what answered -- aux rid vs the
+        # live dp, candidate list with epochs. Confirms or refutes the
+        # per-answer flag at the return site (was the puzzle flag
+        # semantics, or the return path itself?).
+        if (C.COMPOSITE and wep["type"] == "NEW" and probe_idx == 1
+                and dp is not None):
+            self.counts["m73_new_p1_dp"] =                 self.counts.get("m73_new_p1_dp", 0) + 1
+            self.counts["m73_new_p1_used"] =                 self.counts.get("m73_new_p1_used", 0) + derived_use
+            rec["notes"].append(
+                "m73:aux=%s,m=%s,dp=%s,cands=%s,flag=%d" % (
+                    aux.get("rule_id"), method,
+                    ",".join(str(v) for v in dp),
+                    "|".join("%s@e%s" % (r[0], r[3]) for r in cands[:8]),
+                    derived_use))
         self.counts["puz_probes"] += 1
         if method == "book_test":
             self.counts["book_test_uses"] += 1
