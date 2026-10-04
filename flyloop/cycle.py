@@ -189,8 +189,8 @@ class CycleRunner:
                                     # only; derived_use uses derived_params,
                                     # see the M7.3 flag site)
         self.derived_params = {}    # M7.2: {fam: (rid, a, b, ep)} live candidate
-        self.ep_hist = {}           # M7.5: {fam: deque([(a,b), ...])} last
-                                    # identified episodes (multiset, maxlen 2)
+        self.ep_hist = {}           # M7.5/M7.7: {fam: deque([(a,b,ep), ..])}
+                                    # last identified episodes (multiset)
         self.ep_hist_seen = set()   # {(fam, epoch)} already pushed
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
@@ -391,9 +391,13 @@ class CycleRunner:
                 # identified episodes instead of deduped book rules.
                 hist = self.ep_hist.get(fam)
                 if hist is not None and len(hist) == 2:
-                    (a2, b2), (a1, b1) = hist[0], hist[1]
-                    a_d = (a2 + a1) % C.PUZ_P
-                    b_d = (b2 - b1) % C.PUZ_P
+                    (a2, b2, e2), (a1, b1, e1) = hist[0], hist[1]
+                    # M7.7 freshness gate: newest identified episode must be
+                    # the IMMEDIATELY previous one; a gap means stale pair
+                    # (fail-closed skip instead of poison).
+                    if not C.EPUSH_EARLY or e1 == epoch - 1:
+                        a_d = (a2 + a1) % C.PUZ_P
+                        b_d = (b2 - b1) % C.PUZ_P
             else:
                 fam_rules = self.book.get(fam, {})
                 if len(fam_rules) >= 2:
@@ -620,16 +624,25 @@ class CycleRunner:
         if err:
             rec["notes"].append(f"puz:{y}!={truth}({method})")
 
-        # M7.5: record the episode's rule once identified (present in book) --
-        # the DERIVE_EPISODES variant composes the last two identified
-        # EPISODES (multiset, RECALL repeats included), matching the world's
-        # episode-slot composition ep[i-2], ep[i-1].
-        if self.arm == "FULL-COMP":
+        # M7.5/M7.7: record the episode's rule once identified. Two routes:
+        # (a) verified book write (always on); (b) EPUSH_EARLY -- first
+        # book_test retrieval naming this episode's rid, before verification.
+        # (b) is the M7.7 identification-latency lever: composition needs the
+        # last two EPISODES identified by the NEXT episode's start.
+        if self.arm == "FULL-COMP" and (fam, epoch) not in self.ep_hist_seen:
             br = self.book.get(fam, {}).get(wep["rule_id"])
-            if br is not None and (fam, epoch) not in self.ep_hist_seen:
+            early = (C.EPUSH_EARLY and method == "book_test"
+                     and aux.get("rule_id") == wep["rule_id"]
+                     and ab is not None)
+            if br is not None:
                 self.ep_hist_seen.add((fam, epoch))
                 self.ep_hist.setdefault(
-                    fam, deque(maxlen=2)).append((br["a"], br["b"]))
+                    fam, deque(maxlen=2)).append((br["a"], br["b"], epoch))
+            elif early:
+                self.ep_hist_seen.add((fam, epoch))
+                self.ep_hist.setdefault(
+                    fam, deque(maxlen=2)).append((ab[0], ab[1], epoch))
+                rec["notes"].append(f"epush_early:{wep['rule_id']}")
 
         # table fold-in write (all arms, identical cadence)
         if err or d["unseen_since_write"] >= C.TABLE_WRITE_EVERY:

@@ -164,6 +164,12 @@ COMPOSITE_FAM = 2
 # composes episode slots ep[i-2], ep[i-1]; a RECALL interleave makes the
 # deduped-book selection diverge (v10i finding).
 DERIVE_EPISODES = os.environ.get("FLYLOOP_DERIVE_EPISODES", "0") == "1"
+# M7.7: (a) push an episode into the derivation history at FIRST
+# identification (book_test retrieval match), not only at verified book
+# write; (b) derive only when the newest history entry is the IMMEDIATELY
+# previous episode (freshness gate) -- composing across a gap re-introduces
+# the stale-pair poison the episode-slot semantics exist to prevent.
+EPUSH_EARLY = os.environ.get("FLYLOOP_EPUSH_EARLY", "0") == "1"
 ANOMALY_P = float(os.environ.get("FLYLOOP_ANOMALY_P", "0.03"))
 # discovery/matching band under the wavy world: a prediction within
 # +-WAVE_AMP of truth counts as band-correct for the consec gate, and a
