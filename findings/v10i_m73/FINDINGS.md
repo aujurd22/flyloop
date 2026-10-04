@@ -67,3 +67,29 @@ Candidate causes (distinguishable next session):
 2. If anchored scoring still floors fam-2, log the family's book
    write-order vs index-order at derivation time (test cause 1).
 3. Only then consider constraining derivation to the composite family.
+
+## 5. M7.4 resolution (same night, offline)
+
+**M7.4-1 anchored re-score (m74_anchored_rescore.py):** probes reconstructed
+via world.puz_probe — 59/59 truth match. Anchored predictor y1+a_d(xp-x1):
+7/59 vs raw 6/59 (WAVE_AMP=0 in this config, so anchored ≡ slope test).
+dp slope == true slope only 6/59; full (a,b) 1/59. Cause 2 (anchor/wave)
+REFUTED — the slope itself is wrong.
+
+**M7.4-2 predecessor audit (source-level):** world.py composes fam
+COMPOSITE_FAM ONLY, from the two immediate predecessor EPISODES:
+`R_i = (ep[i-2].a + ep[i-1].a, ep[i-2].b - ep[i-1].b)` — RECALL episodes
+OCCUPY slots in that sequence. The cycle.py derivation instead composes the
+two most-recent-by-epoch DISTINCT book rules. Whenever a RECALL interleaves
+(world composed ep[i-2]=r_k, ep[i-1]=r_k; book holds {r_j, r_k}, j≠k), the
+derived pair is wrong. This is the mechanism behind fam-2's 2/13 slope
+accuracy; fams 0/1/3 are random-rule families where blind derivation is
+wrong by design.
+
+## 6. Registered M7.5
+
+Derivation input := the family's last TWO EPISODES (multiset semantics,
+repeats included), not the deduplicated freshest book rules. Implemented as
+FLYLOOP_DERIVE_EPISODES=1 (per-family deque of the last two episode rule
+params as identified at their episodes); adjudicate vs baseline in parallel
+on the 208-core cloud node (baseline + variant, 4 arms each, 1h).
