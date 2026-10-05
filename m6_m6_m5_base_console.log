@@ -11,3 +11,5 @@
 [19:41:32] [supervisor] worker exited rc=1
 [19:41:32] [supervisor] backing off 10s before restart
 [19:41:42] [supervisor] starting worker (restart #1)
+[21:41:50] [diag 25%] rc=0  PASS
+[23:41:54] [diag 50%] rc=0  PASS
