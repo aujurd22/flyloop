@@ -7,6 +7,10 @@ import os
 import socket
 import subprocess
 import sys
+
+WIN = sys.platform == "win32"
+CREAT = (0x00000008 | 0x00000200) if WIN else 0
+CNW = 0x08000000 if WIN else 0
 import time
 
 from . import config as C
@@ -64,7 +68,7 @@ def ram_avail_gb():
 def spawn_service(port: int, db_path: str):
     subprocess.Popen(
         [C.PYTHONW, "mcp_v3.py", "--http", "--port", str(port), "--db", db_path],
-        cwd=C.SANDBOX_MEM_DIR, creationflags=DETACHED | CREATE_NO_WINDOW,
+        cwd=C.SANDBOX_MEM_DIR, creationflags=CREAT,
         close_fds=True)
     tlog(f"[service] spawned sandbox flymemory on port {port} db={db_path}")
 
@@ -109,7 +113,7 @@ def finalize(run_dir, duration_h):
     r = subprocess.run(
         [C.PYTHON, "-m", "flyloop.worker", "--run-dir", run_dir,
          "--duration-h", str(duration_h), "--finalize"],
-        cwd=C.ROOT, creationflags=CREATE_NO_WINDOW,
+        cwd=C.ROOT, creationflags=CNW,
         capture_output=True, text=True, timeout=600)
     tlog(f"[finalize] rc={r.returncode} {r.stdout[-500:]} {r.stderr[-500:]}")
 
@@ -167,7 +171,7 @@ def main():
         proc = subprocess.Popen(
             [C.PYTHON, "-m", "flyloop.worker", "--run-dir", run_dir,
              "--duration-h", str(args.duration_h)],
-            cwd=C.ROOT, creationflags=CREATE_NO_WINDOW, close_fds=True,
+            cwd=C.ROOT, creationflags=CNW, close_fds=True,
             stdout=wlog, stderr=wlog)
         stop_written = os.path.exists(stop_path)
         start_ts = time.time()
@@ -199,7 +203,7 @@ def main():
                                 C.ROOT, "tests", "diagnose.py"),
                              "--run-dir", run_dir],
                             cwd=C.ROOT, capture_output=True, text=True,
-                            creationflags=CREATE_NO_WINDOW)
+                            creationflags=CNW)
                         tlog(f"[diag {int(q*100)}%] rc={rdiag.returncode} "
                              + " | ".join(l for l in
                                           (rdiag.stdout or "").splitlines()
@@ -242,7 +246,7 @@ def main():
         subprocess.run(["reg", "delete",
                         r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
                         "/v", "flyloop_resume", "/f"],
-                       creationflags=CREATE_NO_WINDOW, capture_output=True)
+                       creationflags=CNW, capture_output=True)
     except Exception:
         pass
     tlog("[supervisor] done")

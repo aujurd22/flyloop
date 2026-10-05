@@ -27,7 +27,7 @@ def main():
     subprocess.Popen(
         [C.PYTHON, "-m", "flyloop.supervisor", "--run-dir", run_dir,
          "--duration-h", str(cfg.get("duration_h", 5))],
-        cwd=C.ROOT, creationflags=0x08000000 | 0x00000008,  # NO_WINDOW | DETACHED
+        cwd=C.ROOT, creationflags=(0x08000000 | 0x00000008) if sys.platform == "win32" else 0,  # NO_WINDOW | DETACHED
         close_fds=True)
 
 
