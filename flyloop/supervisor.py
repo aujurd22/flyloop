@@ -25,6 +25,8 @@ def tlog(msg):
 def keep_awake():
     """Hold ES_SYSTEM_REQUIRED for this process's lifetime: blocks idle sleep
     without touching the user's power plan (released on process exit)."""
+    if sys.platform != "win32":
+        return
     try:
         import ctypes
         ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)

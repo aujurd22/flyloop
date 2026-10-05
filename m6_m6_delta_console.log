@@ -8,3 +8,4 @@
 [18:28:58] [service] spawned sandbox flymemory on port 53154 db=D:\djr82\flyloop\runs\m6_delta\mem_arm3.pkl
 [18:29:16] [service] port is up
 [18:29:16] [supervisor] starting worker (restart #0)
+[20:29:24] [diag 25%] rc=0  PASS
