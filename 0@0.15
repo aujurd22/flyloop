@@ -1,0 +1,6 @@
+heartbeat: cycle=206 fails=0 age=0.1min ram=5.5GB
+elapsed: 0.12 h
+FULL-COMP: discoveries=6 book_writes=6
+FULL: discoveries=6 book_writes=6
+WARN unparseable gate: derived_writes
+DIAG PASS

@@ -183,18 +183,14 @@ class CycleRunner:
         # confirmed entries). res_seen[x][r] counts visits; res_conf[x]=r
         # after 2-of-2 agreement at the same x (flip resistance).
         self.res_seen = {}   # {fam: {rid: {x: {r: count}}}}
-        # M6: RAM-only observation ledger {fam: {rid: [(epoch, x, y)]}}
-        # + consecutive-miss counters for the error-triggered delta lookup.
-        self.res_hist = {}
-        self.delta_miss = {}
         self.res_conf = {}   # {fam: {rid: {x: r}}}
         self.res_last = {}   # {(fam, rid): last written keep-list}
         self.derived_rids = set()   # M7: rids ever derived (insight-note tag
                                     # only; derived_use uses derived_params,
                                     # see the M7.3 flag site)
         self.derived_params = {}    # M7.2: {fam: (rid, a, b, ep)} live candidate
-        self.ep_hist = {}           # M7.5/M7.7: {fam: deque([(a,b,ep), ..])}
-                                    # last identified episodes (multiset)
+        self.ep_hist = {}           # M7.5: {fam: deque([(a,b), ...])} last
+                                    # identified episodes (multiset, maxlen 2)
         self.ep_hist_seen = set()   # {(fam, epoch)} already pushed
         self.epi_index = {}  # {fam: [epochs archived]} — keys of the M-arm archive
         self.book_index = {}  # {fam: set(rids written)} — G2 perrule keys
@@ -395,13 +391,9 @@ class CycleRunner:
                 # identified episodes instead of deduped book rules.
                 hist = self.ep_hist.get(fam)
                 if hist is not None and len(hist) == 2:
-                    (a2, b2, e2), (a1, b1, e1) = hist[0], hist[1]
-                    # M7.7 freshness gate: newest identified episode must be
-                    # the IMMEDIATELY previous one; a gap means stale pair
-                    # (fail-closed skip instead of poison).
-                    if not C.EPUSH_EARLY or e1 == epoch - 1:
-                        a_d = (a2 + a1) % C.PUZ_P
-                        b_d = (b2 - b1) % C.PUZ_P
+                    (a2, b2), (a1, b1) = hist[0], hist[1]
+                    a_d = (a2 + a1) % C.PUZ_P
+                    b_d = (b2 - b1) % C.PUZ_P
             else:
                 fam_rules = self.book.get(fam, {})
                 if len(fam_rules) >= 2:
@@ -565,46 +557,12 @@ class CycleRunner:
             min_frac=adj_min_frac,
             epi_tol=0 if self.arm == "MATCHED-EXACT" else None,
             res_map=res_map)
-        # M6 delta retrieval: after >=2 consecutive misses on this rule,
-        # recover the historical b from the observation ledger (PERIODIC
-        # drift is b-only; slope from the live fit is drift-invariant).
-        if (C.DELTA_RETRIEVE and fam == C.PERIODIC_FAM
-                and self.arm in ("FULL-RES", "FULL-COMP")):
-            dkey = (fam, wep["rule_id"], epoch)
-            if (self.delta_miss.get(dkey, 0) >= 2 and len(obs) >= 2):
-                ab_live = reasoner.fit_from(list(obs), C.PUZ_P)
-                if ab_live is not None:
-                    a_ref = ab_live[0]
-                    x_l, y_l = obs[-1]
-                    b_cand = (y_l - a_ref * x_l) % C.PUZ_P
-                    hist = self.res_hist.get((fam, wep["rule_id"]), [])
-                    agree = sum(1 for (ep_h, x_h, y_h) in hist
-                                if x_h != x_l
-                                and (y_h - a_ref * x_h) % C.PUZ_P == b_cand)
-                    self.counts["delta_try"] =                         self.counts.get("delta_try", 0) + 1
-                    if agree >= 2:
-                        y = (a_ref * xp + b_cand) % C.PUZ_P
-                        method = "delta_recover"
-                        ab = (a_ref, b_cand)
-                        aux = {"delta_b": b_cand, "delta_agree": agree}
-                        self.counts["delta_recover"] =                             self.counts.get("delta_recover", 0) + 1
 
         stale_present = bool(cands) if self.arm in ("FULL", "FULL-RAW", "FULL-ADAPT", "FULL-RES", "FULL-COMP") else \
             any(int(m.group(5)) != epoch for m in
                 [reasoner.P_PAIRS.search(t) for _, t in entries]
                 if m and int(m.group(2)) == fam)
         err = 1 if (y is None or y != truth) else 0
-        if C.DELTA_RETRIEVE and fam == C.PERIODIC_FAM:
-            dkey = (fam, wep["rule_id"], epoch)
-            hkey = (fam, wep["rule_id"])
-            h = self.res_hist.setdefault(hkey, [])
-            h.append((epoch, xp, truth))
-            if len(h) > 600:
-                self.res_hist[hkey] = h[-600:]
-            if err:
-                self.delta_miss[dkey] = self.delta_miss.get(dkey, 0) + 1
-            else:
-                self.delta_miss[dkey] = 0
         stale_intrusion = int(err == 1 and method in
                               ("book_test", "epi_test", "fit_stale", "rule"))
         # M7.3 per-answer derived flag: 1 only when the answer actually came
@@ -662,25 +620,16 @@ class CycleRunner:
         if err:
             rec["notes"].append(f"puz:{y}!={truth}({method})")
 
-        # M7.5/M7.7: record the episode's rule once identified. Two routes:
-        # (a) verified book write (always on); (b) EPUSH_EARLY -- first
-        # book_test retrieval naming this episode's rid, before verification.
-        # (b) is the M7.7 identification-latency lever: composition needs the
-        # last two EPISODES identified by the NEXT episode's start.
-        if self.arm == "FULL-COMP" and (fam, epoch) not in self.ep_hist_seen:
+        # M7.5: record the episode's rule once identified (present in book) --
+        # the DERIVE_EPISODES variant composes the last two identified
+        # EPISODES (multiset, RECALL repeats included), matching the world's
+        # episode-slot composition ep[i-2], ep[i-1].
+        if self.arm == "FULL-COMP":
             br = self.book.get(fam, {}).get(wep["rule_id"])
-            early = (C.EPUSH_EARLY and method == "book_test"
-                     and aux.get("rule_id") == wep["rule_id"]
-                     and ab is not None)
-            if br is not None:
+            if br is not None and (fam, epoch) not in self.ep_hist_seen:
                 self.ep_hist_seen.add((fam, epoch))
                 self.ep_hist.setdefault(
-                    fam, deque(maxlen=2)).append((br["a"], br["b"], epoch))
-            elif early:
-                self.ep_hist_seen.add((fam, epoch))
-                self.ep_hist.setdefault(
-                    fam, deque(maxlen=2)).append((ab[0], ab[1], epoch))
-                rec["notes"].append(f"epush_early:{wep['rule_id']}")
+                    fam, deque(maxlen=2)).append((br["a"], br["b"]))
 
         # table fold-in write (all arms, identical cadence)
         if err or d["unseen_since_write"] >= C.TABLE_WRITE_EVERY:

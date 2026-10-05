@@ -1,0 +1,17 @@
+[20:42:08] [supervisor] run_dir=D:\djr82\flyloop\runs\m73_retest_20261004_2055 duration=2.0h ram_avail=7.7GB
+[20:42:09] [service] spawned sandbox flymemory on port 52991 db=D:\djr82\flyloop\runs\m73_retest_20261004_2055\mem_FULL-COMP.pkl
+[20:42:23] [service] port is up
+[20:42:23] [service] spawned sandbox flymemory on port 52992 db=D:\djr82\flyloop\runs\m73_retest_20261004_2055\mem_FULL.pkl
+[20:42:37] [service] port is up
+[20:42:38] [service] spawned sandbox flymemory on port 52993 db=D:\djr82\flyloop\runs\m73_retest_20261004_2055\mem_MATCHED.pkl
+[20:42:52] [service] port is up
+[20:42:53] [service] spawned sandbox flymemory on port 52994 db=D:\djr82\flyloop\runs\m73_retest_20261004_2055\mem_EPISODIC.pkl
+[20:43:10] [service] port is up
+[20:43:10] [supervisor] starting worker (restart #0)
+[21:13:16] [diag 25%] rc=0  PASS
+[21:43:17] [diag 50%] rc=0  PASS
+[22:13:18] [diag 75%] rc=0  PASS
+[22:43:14] [supervisor] deadline during run -> STOP written
+[22:43:19] [supervisor] worker exited rc=0
+[22:43:19] [supervisor] worker finished gracefully
+[22:43:19] [supervisor] done
