@@ -132,9 +132,11 @@ BOOK_TEST_K = 5              # recency window of book candidates tested per prob
 # V4 length mix: probes per episode. A family is probed every 8 cycles
 # (cycle c with c%2==0 and (c//2)%4==f), so n_probes -> cycle length is 8n.
 # Short episodes (4-6 probes) usually end before consec reaches 3.
-PUZ_PROBE_CADENCE = 8
+PUZ_PROBE_CADENCE = int(os.environ.get("FLYLOOP_PROBE_CADENCE", "8"))
 EPISODE_PROBE_LENS = [4, 6, 10, 20, 40]
-EPISODE_PROBE_WEIGHTS = [0.15, 0.15, 0.25, 0.25, 0.20]
+_w = os.environ.get("FLYLOOP_PROBE_WEIGHTS", "")
+EPISODE_PROBE_WEIGHTS = ([float(x) for x in _w.split(",")] if _w
+                         else [0.15, 0.15, 0.25, 0.25, 0.20])
 # V5 observation noise: the REVEALED pair's y1 flips to a different value with
 # probability NOISE_EPS (truth untouched — measurement noise, not drift). Pure
 # function of (fam, cycle, seed), identical across arms. Run A (V4) is the
