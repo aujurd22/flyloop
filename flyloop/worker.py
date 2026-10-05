@@ -51,6 +51,12 @@ def log(msg):
 
 
 def ram_avail_gb():
+    if sys.platform != "win32":
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable"):
+                    return int(line.split()[1]) / 2**20
+        return 0.0
     import ctypes, ctypes.wintypes as w
 
     class M(ctypes.Structure):

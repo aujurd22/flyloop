@@ -9,3 +9,9 @@
 [18:29:16] [service] port is up
 [18:29:16] [supervisor] starting worker (restart #0)
 [20:29:24] [diag 25%] rc=0  PASS
+[22:29:27] [diag 50%] rc=0  PASS
+[00:29:30] [diag 75%] rc=0  PASS
+[02:29:17] [supervisor] deadline during run -> STOP written
+[02:29:22] [supervisor] worker exited rc=0
+[02:29:22] [supervisor] worker finished gracefully
+[02:29:22] [supervisor] done

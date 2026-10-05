@@ -13,3 +13,8 @@
 [19:41:42] [supervisor] starting worker (restart #1)
 [21:41:50] [diag 25%] rc=0  PASS
 [23:41:54] [diag 50%] rc=0  PASS
+[01:41:57] [diag 75%] rc=0  PASS
+[02:29:18] [supervisor] deadline during run -> STOP written
+[02:29:23] [supervisor] worker exited rc=0
+[02:29:23] [supervisor] worker finished gracefully
+[02:29:23] [supervisor] done
